@@ -12,6 +12,7 @@ from crewai import Agent, Task, Crew
 from datetime import datetime, timedelta
 from functools import lru_cache
 
+# --- Standard Setup ---
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyA2C2-YB43Mra_cleDmrblCJ-JSzd2cPfk")
 SERP_API_KEY = os.getenv("SERP_API_KEY", "0c05012f41e43d4f77923b240810779b7251f4b12b3fcc08368d79c195bbc5a5")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -41,10 +42,10 @@ class ParsedTravelDetails(BaseModel):
     outbound_date: Optional[str] = None; days: Optional[int] = None
     success: bool = False; error: Optional[str] = None
 
-app = FastAPI(title="Travel Planning API", version="2.0.0-Final")
+app = FastAPI(title="Travel Planning API", version="3.0.0-Final")
 
 # --- IATA Code Handling ---
-CITY_TO_IATA = { "mumbai": "BOM", "vadodara": "BDQ", "dubai": "DXB", "switzerland": "ZRH", "hyderabad": "HYD", "delhi": "DEL", "goa": "GOI" }
+CITY_TO_IATA = { "mumbai": "BOM", "vadodara": "BDQ", "dubai": "DXB", "switzerland": "ZRH", "hyderabad": "HYD", "delhi": "DEL", "goa": "GOI", "bangalore": "BLR" }
 
 async def run_search(params):
     try: return await asyncio.to_thread(lambda: GoogleSearch(params).get_dict())
@@ -148,7 +149,7 @@ async def ep_parse_travel_query(req: ParseQueryRequest):
         Current date is {today.strftime('%Y-%m-%d')}.
         CRITICAL RULE: If any piece of information is NOT in the query, you MUST use a `null` value. Do not guess.
         QUERY: "{req.query}"
-        Fields: "origin", "destination", "outbound_date" (YYYY-MM-DD), "days".
+        Fields: "origin", "destination", "outbound_date" (YYYY-MM-DD), "days" (integer).
         For dates, if no year is given, use {today.year} unless the date has passed, then use {today.year + 1}.
         Example for "mumbai to udaipur": {{"origin": "Mumbai", "destination": "Udaipur", "outbound_date": null, "days": null}}
         """
