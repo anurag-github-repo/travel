@@ -3,12 +3,13 @@ import uvicorn
 import asyncio
 import logging
 import re
+import json
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from serpapi import GoogleSearch
-from crewai import Agent, Task, Crew, Process, LLM
-from datetime import datetime
+from crewai import Agent, Task, Crew
+from datetime import datetime, timedelta
 from functools import lru_cache
 
 # Load API Keys
@@ -19,798 +20,185 @@ SERP_API_KEY = os.getenv("SERP_API_KEY", "0c05012f41e43d4f77923b240810779b7251f4
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-
-# ==============================================
-# 🤖 Initialize Google Gemini AI (LLM)
-# ==============================================
+# --- LLM Initialization ---
 @lru_cache(maxsize=1)
 def initialize_llm():
-    """Initialize and cache the LLM instance to avoid repeated initializations."""
-    return LLM(
-        model="gemini/gemini-2.0-flash",
-        api_key=GEMINI_API_KEY
-    )
+    from crewai import LLM
+    return LLM(model="gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
 
-# ==============================================
-# 📝 Pydantic Models
-# ==============================================
-class FlightRequest(BaseModel):
-    origin: str
-    destination: str
-    outbound_date: str
-    return_date: str
-
-
-class HotelRequest(BaseModel):
-    location: str
-    check_in_date: str
-    check_out_date: str
-
-
-class ItineraryRequest(BaseModel):
-    destination: str
-    check_in_date: str
-    check_out_date: str
-    flights: str
-    hotels: str
-
-
-class FlightInfo(BaseModel):
-    airline: str
-    price: str
-    duration: str
-    stops: str
-    departure: str
-    arrival: str
-    travel_class: str
-    return_date: str
-    airline_logo: str
-
-
-class HotelInfo(BaseModel):
-    name: str
-    price: str
-    rating: float
-    location: str
-    link: str
-
-
+# --- Pydantic Models ---
+class FlightRequest(BaseModel): origin: str; destination: str; outbound_date: str; return_date: str
+class HotelRequest(BaseModel): location: str; check_in_date: str; check_out_date: str
+class ItineraryRequest(BaseModel): destination: str; check_in_date: str; check_out_date: str; flights: str; hotels: str
+class GeneralQueryRequest(BaseModel): destination: str; query: str
+class FlightInfo(BaseModel): airline: str; price: str; duration: str; stops: str; departure: str; arrival: str; travel_class: str; return_date: str; airline_logo: str
+class HotelInfo(BaseModel): name: str; price: str; rating: float; location: str; link: str
 class AIResponse(BaseModel):
-    flights: List[FlightInfo] = []
-    hotels: List[HotelInfo] = []
-    ai_flight_recommendation: str = ""
-    ai_hotel_recommendation: str = ""
-    itinerary: str = ""
+    flights: List[FlightInfo] = Field(default_factory=list); hotels: List[HotelInfo] = Field(default_factory=list)
+    ai_flight_recommendation: str = ""; ai_hotel_recommendation: str = ""
+    itinerary: str = ""; general_answer: Optional[str] = None
+class ParseQueryRequest(BaseModel): query: str
+class ParsedTravelDetails(BaseModel):
+    origin: Optional[str] = None; destination: Optional[str] = None
+    outbound_date: Optional[str] = None; days: Optional[int] = None
+    success: bool = False; error: Optional[str] = None
 
+app = FastAPI(title="Travel Planning API", version="1.7.0")
 
-# ==============================================
-# 🚀 Initialize FastAPI
-# ==============================================
-app = FastAPI(title="Travel Planning API", version="1.1.0")
+# --- IATA Code Handling ---
+CITY_TO_IATA = { "mumbai": "BOM", "hyderabad": "HYD", "delhi": "DEL", "bangalore": "BLR", "chennai": "MAA", "kolkata": "CCU", "pune": "PNQ", "goa": "GOI", "ahmedabad": "AMD", "kochi": "COK", "jaipur": "JAI", "udaipur": "UDR", "vadodara": "BDQ" }
 
-
-# ==============================================
-# 🗺️ City Name to IATA Code Mapping
-# ==============================================
-CITY_TO_IATA = {
-    # Indian Cities
-    "mumbai": "BOM",
-    "hyderabad": "HYD",
-    "delhi": "DEL",
-    "bangalore": "BLR",
-    "chennai": "MAA",
-    "kolkata": "CCU",
-    "pune": "PNQ",
-    "goa": "GOI",
-    "ahmedabad": "AMD",
-    "kochi": "COK",
-    "jaipur": "JAI",
-    "lucknow": "LKO",
-    "indore": "IDR",
-    "bhopal": "BHO",
-    "visakhapatnam": "VTZ",
-    "coimbatore": "CJB",
-    "nagpur": "NAG",
-    "patna": "PAT",
-    "vadodara": "BDQ",
-    "guwahati": "GAU",
-    "varanasi": "VNS",
-    "kerala": "COK",  # Kochi is the main airport for Kerala
-    "kerela": "COK",  # Common misspelling
-    "kozhikode": "CCJ",
-    "calicut": "CCJ",
-    "thiruvananthapuram": "TRV",
-    "trivandrum": "TRV",
-    # US Cities
-    "new york": "JFK",
-    "los angeles": "LAX",
-    "chicago": "ORD",
-    "san francisco": "SFO",
-    "miami": "MIA",
-    "atlanta": "ATL",
-    "boston": "BOS",
-    "washington": "DCA",
-    "seattle": "SEA",
-    "houston": "IAH",
-    "dallas": "DFW",
-    "philadelphia": "PHL",
-    "phoenix": "PHX",
-    "las vegas": "LAS",
-    "denver": "DEN",
-    "detroit": "DTW",
-    "minneapolis": "MSP",
-    # Other Major Cities
-    "london": "LHR",
-    "paris": "CDG",
-    "tokyo": "NRT",
-    "dubai": "DXB",
-    "singapore": "SIN",
-    "sydney": "SYD",
-    "toronto": "YYZ",
-    "vancouver": "YVR",
-    "amsterdam": "AMS",
-    "frankfurt": "FRA",
-    "madrid": "MAD",
-    "rome": "FCO",
-    "istanbul": "IST",
-    "bangkok": "BKK",
-    "hong kong": "HKG",
-    "shanghai": "PVG",
-    "beijing": "PEK",
-}
-
-
-async def search_airport_iata_code(city_name: str) -> Optional[str]:
-    """Search for IATA code using Google Search via SerpAPI.
-    
-    Uses more specific queries to find the main/commercial airport for a city.
-    Prioritizes international airports and main commercial airports.
-    """
-    try:
-        # Use more specific search queries that are more likely to return the main airport
-        search_queries = [
-            f"{city_name} international airport IATA code",
-            f"{city_name} main airport IATA code",
-            f"{city_name} airport IATA code",
-            f"flights from {city_name} airport code",
-            f"{city_name} commercial airport"
-        ]
-        
-        # Collect all potential IATA codes with their relevance scores
-        candidates = {}
-        
-        for query in search_queries:
-            try:
-                logger.info(f"Searching Google for: {query}")
-                params = {
-                    "api_key": SERP_API_KEY,
-                    "engine": "google",
-                    "q": query,
-                    "num": 10  # Get more results for better accuracy
-                }
-                search_results = await run_search(params)
-                
-                # Common non-IATA codes to exclude
-                common_exclude = {
-                    "THE", "AND", "FOR", "ARE", "NOT", "USA", "UK", "CAN", "ALL", "NEW", "OLD", 
-                    "TOP", "BEST", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC", 
-                    "JAN", "FEB", "MAR", "APR", "VIA", "ONE", "TWO", "DAY", "NOW", "SEE", 
-                    "GET", "USE", "WAY", "OUT", "OFF", "OUR", "HOW", "WHO", "WHY", "WAS", 
-                    "HAS", "ITS", "HIS", "HER", "SHE", "HIM", "BUT", "HAD", "WAS", "SAY", 
-                    "SAY", "SHE", "HER", "HIM", "HIS", "ITS", "OUR", "OUT", "OFF", "WAY"
-                }
-                
-                # Check answer box first (most reliable)
-                answer_box = search_results.get("answer_box", {})
-                if answer_box:
-                    answer_text = str(answer_box).upper()
-                    iata_pattern = r'\b([A-Z]{3})\b'
-                    matches = re.findall(iata_pattern, answer_text)
-                    for match in matches:
-                        if match not in common_exclude:
-                            # Answer box results are highly reliable
-                            candidates[match] = candidates.get(match, 0) + 10
-                            logger.info(f"Found candidate IATA code {match} in answer box for {city_name}")
-                
-                # Check knowledge graph
-                knowledge_graph = search_results.get("knowledge_graph", {})
-                if knowledge_graph:
-                    kg_text = str(knowledge_graph).upper()
-                    iata_pattern = r'\b([A-Z]{3})\b'
-                    matches = re.findall(iata_pattern, kg_text)
-                    for match in matches:
-                        if match not in common_exclude:
-                            candidates[match] = candidates.get(match, 0) + 8
-                
-                # Look in organic results
-                organic_results = search_results.get("organic_results", [])
-                for idx, result in enumerate(organic_results[:5]):  # Check top 5 results
-                    snippet = result.get("snippet", "").upper()
-                    title = result.get("title", "").upper()
-                    link = result.get("link", "").lower()
-                    
-                    # Prioritize results from airport/aviation websites
-                    link_score = 3
-                    if any(domain in link for domain in ["airport", "flight", "aviation", "iata", "wikipedia"]):
-                        link_score = 5
-                    
-                    # Look for IATA codes in the text
-                    iata_pattern = r'\b([A-Z]{3})\b'
-                    text = snippet + " " + title
-                    matches = re.findall(iata_pattern, text)
-                    
-                    for match in matches:
-                        if match not in common_exclude:
-                            # Check if it's mentioned in airport context
-                            context = text.lower()
-                            if any(word in context for word in ["airport", "iata", "code", "flight", "terminal", "airline"]):
-                                # Higher score for earlier results and airport-related sites
-                                score = link_score + (5 - idx)
-                                candidates[match] = candidates.get(match, 0) + score
-                                
-            except Exception as e:
-                logger.warning(f"Error searching for {query}: {str(e)}")
-                continue
-        
-        # Return the candidate with the highest score
-        if candidates:
-            # Sort by score (descending)
-            sorted_candidates = sorted(candidates.items(), key=lambda x: x[1], reverse=True)
-            best_code = sorted_candidates[0][0]
-            logger.info(f"Found IATA code {best_code} for {city_name} (score: {sorted_candidates[0][1]}, alternatives: {sorted_candidates[:3]})")
-            return best_code
-                
-    except Exception as e:
-        logger.warning(f"Error in airport IATA code search for {city_name}: {str(e)}")
-    
-    return None
-
-
-async def convert_city_to_location_id(location_name: str) -> str:
-    """Convert city name to IATA code or Google Place ID format.
-    
-    Uses multiple methods:
-    1. Check if already a valid code
-    2. Check city mapping dictionary (fast lookup)
-    3. Search Google for airport IATA code (dynamic lookup)
-    4. Use SerpAPI location API for Google Place ID (fallback)
-    
-    Returns:
-        - IATA code (3 uppercase letters) if found
-        - Google Place ID format (/m/...) if found via SerpAPI location API
-        - Original input if conversion fails
-    """
-    location_name = location_name.strip()
-    
-    # If it's already a 3-letter code, return uppercase
-    if len(location_name) == 3 and location_name.isalpha():
-        return location_name.upper()
-    
-    # Check if it's already a Google Place ID format
-    if location_name.startswith("/m/"):
-        return location_name
-    
-    # Try to find in city mapping (case-insensitive) - fast lookup
-    location_lower = location_name.lower()
-    if location_lower in CITY_TO_IATA:
-        logger.info(f"Found IATA code for {location_name}: {CITY_TO_IATA[location_lower]}")
-        return CITY_TO_IATA[location_lower]
-    
-    # Try to search for airport IATA code using Google Search
-    logger.info(f"Searching for airport IATA code for: {location_name}")
-    iata_code = await search_airport_iata_code(location_name)
-    if iata_code:
-        logger.info(f"Found IATA code via Google search: {iata_code}")
-        return iata_code
-    
-    # Fallback: Try to get location ID from SerpAPI location API
-    try:
-        logger.info(f"Looking up location ID for: {location_name}")
-        search = GoogleSearch({"api_key": SERP_API_KEY})
-        location_list = await asyncio.to_thread(
-            lambda: search.get_location(location_name, 3)  # Get more results
-        )
-        
-        if location_list and len(location_list) > 0:
-            # Try to find airport or city location
-            for location in location_list:
-                location_name_check = location.get("name", "").lower()
-                canonical_name = location.get("canonical_name", "").lower()
-                
-                # Check if this looks like an airport or main city
-                if any(keyword in location_name_check or keyword in canonical_name 
-                       for keyword in ["airport", location_name.lower()]):
-                    google_id = location.get("google_id")
-                    if google_id:
-                        location_id = f"/m/{google_id}"
-                        logger.info(f"Found Google Place ID for {location_name}: {location_id}")
-                        return location_id
-            
-            # Use first result as fallback
-            location = location_list[0]
-            google_id = location.get("google_id")
-            if google_id:
-                location_id = f"/m/{google_id}"
-                logger.info(f"Found Google Place ID (fallback) for {location_name}: {location_id}")
-                return location_id
-                
-    except Exception as e:
-        logger.warning(f"Could not get location ID from SerpAPI for {location_name}: {str(e)}")
-    
-    # If all else fails, return the original (will cause an error, but at least we tried)
-    logger.warning(f"Could not convert {location_name} to IATA code or location ID. Using as-is.")
-    return location_name
-
-
-# ==============================================
-# 🛫 Fetch Data from SerpAPI
-# ==============================================
 async def run_search(params):
-    """Generic function to run SerpAPI searches asynchronously."""
+    try: return await asyncio.to_thread(lambda: GoogleSearch(params).get_dict())
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Search API error: {e}")
+
+async def convert_city_to_location_id(city_name: str) -> str:
+    city_lower = city_name.lower().strip()
+    if len(city_lower) == 3 and city_lower.isalpha(): return city_lower.upper()
+    if city_lower in CITY_TO_IATA: return CITY_TO_IATA[city_lower]
     try:
-        return await asyncio.to_thread(lambda: GoogleSearch(params).get_dict())
-    except Exception as e:
-        logger.exception(f"SerpAPI search error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Search API error: {str(e)}")
+        logger.info(f"Dynamically searching for IATA code for {city_name}")
+        params = {"api_key": SERP_API_KEY, "engine": "google", "q": f"{city_name} airport IATA code"}
+        search_results = await run_search(params)
+        text_to_search = str(search_results.get("answer_box", "")) + str(search_results.get("organic_results", ""))
+        matches = re.findall(r'\b([A-Z]{3})\b', text_to_search)
+        if matches:
+            iata_code = matches[0]; CITY_TO_IATA[city_lower] = iata_code
+            logger.info(f"Found and cached IATA code for {city_name}: {iata_code}")
+            return iata_code
+    except Exception as e: logger.warning(f"Dynamic IATA search failed for {city_name}: {e}")
+    logger.error(f"Could not find IATA code for {city_name}. Using original name.")
+    return city_name
 
+# --- Data Fetching ---
+async def search_flights(req: FlightRequest):
+    origin = await convert_city_to_location_id(req.origin)
+    destination = await convert_city_to_location_id(req.destination)
+    params = { "api_key": SERP_API_KEY, "engine": "google_flights", "hl": "en", "gl": "in", "departure_id": origin, "arrival_id": destination, "outbound_date": req.outbound_date, "return_date": req.return_date, "currency": "INR" }
+    res = await run_search(params)
+    if "error" in res: return {"error": res["error"]}
+    return [FlightInfo(**{
+        "airline": f.get("flights")[0].get("airline", "N/A"), "price": str(f.get("price", "N/A")),
+        "duration": f"{f.get('total_duration', 'N/A')} min", "stops": "Nonstop" if len(f["flights"]) == 1 else f"{len(f['flights']) - 1} stop(s)",
+        "departure": f.get("flights")[0].get("departure_airport", {}).get("time", "N/A"), "arrival": f.get("flights")[0].get("arrival_airport", {}).get("time", "N/A"),
+        "travel_class": f.get("flights")[0].get("travel_class", "Economy"), "return_date": req.return_date,
+        "airline_logo": f.get("flights")[0].get("airline_logo", "")
+    }) for f in res.get("best_flights", []) if f.get("flights")]
 
-async def search_flights(flight_request: FlightRequest):
-    """Fetch real-time flight details from Google Flights using SerpAPI.
-    Accepts both IATA codes (e.g., 'BOM', 'HYD') and city names (e.g., 'Mumbai', 'Hyderabad').
-    """
-    logger.info(f"Searching flights: {flight_request.origin} to {flight_request.destination}")
+async def search_hotels(req: HotelRequest):
+    params = { "api_key": SERP_API_KEY, "engine": "google_hotels", "q": f"hotels in {req.location}", "hl": "en", "gl": "in", "check_in_date": req.check_in_date, "check_out_date": req.check_out_date, "currency": "INR" }
+    res = await run_search(params)
+    if "error" in res: return {"error": res["error"]}
+    return [HotelInfo(**{
+        "name": h.get("name", "N/A"), "price": h.get("rate_per_night", {}).get("lowest", "N/A"),
+        "rating": h.get("overall_rating", 0.0), "location": h.get("location", "N/A"), "link": h.get("link", "#")
+    }) for h in res.get("properties", [])]
 
-    # Convert city names to IATA codes or location IDs
-    origin = await convert_city_to_location_id(flight_request.origin)
-    destination = await convert_city_to_location_id(flight_request.destination)
+# --- AI Crew Tasks ---
+async def run_crew_task(agent, task):
+    crew = Crew(agents=[agent], tasks=[task], verbose=False)
+    return await asyncio.to_thread(crew.kickoff)
 
-    params = {
-        "api_key": SERP_API_KEY,
-        "engine": "google_flights",
-        "hl": "en",
-        "gl": "us",
-        "departure_id": origin,
-        "arrival_id": destination,
-        "outbound_date": flight_request.outbound_date,
-        "return_date": flight_request.return_date,
-        "currency": "USD"
-    }
-
-    search_results = await run_search(params)
-
-    if "error" in search_results:
-        error_msg = search_results["error"]
-        logger.error(f"Flight search error: {error_msg}")
-        
-        # Provide helpful error messages
-        if "hasn't returned any results" in error_msg.lower():
-            return {
-                "error": f"No flights found between {origin} and {destination}. "
-                        f"This could mean: (1) No commercial flights exist between these airports, "
-                        f"(2) The airports may not be major commercial airports, or "
-                        f"(3) Please try using major city names or IATA codes directly."
-            }
-        return {"error": error_msg}
-
-    best_flights = search_results.get("best_flights", [])
-    if not best_flights:
-        logger.warning("No flights found in search results")
-        return []
-
-    formatted_flights = []
-    for flight in best_flights:
-        if not flight.get("flights") or len(flight["flights"]) == 0:
-            continue
-
-        first_leg = flight["flights"][0]
-        formatted_flights.append(FlightInfo(
-            airline=first_leg.get("airline", "Unknown Airline"),
-            price=str(flight.get("price", "N/A")),
-            duration=f"{flight.get('total_duration', 'N/A')} min",
-            stops="Nonstop" if len(flight["flights"]) == 1 else f"{len(flight['flights']) - 1} stop(s)",
-            departure=f"{first_leg.get('departure_airport', {}).get('name', 'Unknown')} ({first_leg.get('departure_airport', {}).get('id', '???')}) at {first_leg.get('departure_airport', {}).get('time', 'N/A')}",
-            arrival=f"{first_leg.get('arrival_airport', {}).get('name', 'Unknown')} ({first_leg.get('arrival_airport', {}).get('id', '???')}) at {first_leg.get('arrival_airport', {}).get('time', 'N/A')}",
-            travel_class=first_leg.get("travel_class", "Economy"),
-            return_date=flight_request.return_date,
-            airline_logo=first_leg.get("airline_logo", "")
-        ))
-
-    logger.info(f"Found {len(formatted_flights)} flights")
-    return formatted_flights
-
-
-async def search_hotels(hotel_request: HotelRequest):
-    """Fetch hotel information from SerpAPI."""
-    logger.info(f"Searching hotels for: {hotel_request.location}")
-
-    params = {
-        "api_key": SERP_API_KEY,
-        "engine": "google_hotels",
-        "q": hotel_request.location,
-        "hl": "en",
-        "gl": "us",
-        "check_in_date": hotel_request.check_in_date,
-        "check_out_date": hotel_request.check_out_date,
-        "currency": "USD",
-        "sort_by": 3,
-        "rating": 8
-    }
-
-    search_results = await run_search(params)
-
-    if "error" in search_results:
-        logger.error(f"Hotel search error: {search_results['error']}")
-        return {"error": search_results["error"]}
-
-    hotel_properties = search_results.get("properties", [])
-    if not hotel_properties:
-        logger.warning("No hotels found in search results")
-        return []
-
-    formatted_hotels = []
-    for hotel in hotel_properties:
-        try:
-            formatted_hotels.append(HotelInfo(
-                name=hotel.get("name", "Unknown Hotel"),
-                price=hotel.get("rate_per_night", {}).get("lowest", "N/A"),
-                rating=hotel.get("overall_rating", 0.0),
-                location=hotel.get("location", "N/A"),
-                link=hotel.get("link", "N/A")
-            ))
-        except Exception as e:
-            logger.warning(f"Error formatting hotel data: {str(e)}")
-            # Continue with next hotel rather than failing completely
-
-    logger.info(f"Found {len(formatted_hotels)} hotels")
-    return formatted_hotels
-
-
-# ==============================================
-# 🔄 Format Data for AI
-# ==============================================
-def format_travel_data(data_type, data):
-    """Generic formatter for both flight and hotel data."""
-    if not data:
-        return f"No {data_type} available."
-
-    if data_type == "flights":
-        formatted_text = "✈️ **Available flight options**:\n\n"
-        for i, flight in enumerate(data):
-            formatted_text += (
-                f"**Flight {i + 1}:**\n"
-                f"✈️ **Airline:** {flight.airline}\n"
-                f"💰 **Price:** ${flight.price}\n"
-                f"⏱️ **Duration:** {flight.duration}\n"
-                f"🛑 **Stops:** {flight.stops}\n"
-                f"🕔 **Departure:** {flight.departure}\n"
-                f"🕖 **Arrival:** {flight.arrival}\n"
-                f"💺 **Class:** {flight.travel_class}\n\n"
-            )
-    elif data_type == "hotels":
-        formatted_text = "🏨 **Available Hotel Options**:\n\n"
-        for i, hotel in enumerate(data):
-            formatted_text += (
-                f"**Hotel {i + 1}:**\n"
-                f"🏨 **Name:** {hotel.name}\n"
-                f"💰 **Price:** ${hotel.price}\n"
-                f"⭐ **Rating:** {hotel.rating}\n"
-                f"📍 **Location:** {hotel.location}\n"
-                f"🔗 **More Info:** [Link]({hotel.link})\n\n"
-            )
-    else:
-        return "Invalid data type."
-
-    return formatted_text.strip()
-
-
-# ==============================================
-# 🧠 AI Analysis Functions
-# ==============================================
-async def get_ai_recommendation(data_type, formatted_data):
-    """Unified function for getting AI recommendations for both flights and hotels."""
-    logger.info(f"Getting {data_type} analysis from AI")
-    llm_model = initialize_llm()
-
-    # Configure agent based on data type
-    if data_type == "flights":
-        role = "AI Flight Analyst"
-        goal = "Analyze flight options and recommend the best one considering price, duration, stops, and overall convenience."
-        backstory = f"AI expert that provides in-depth analysis comparing flight options based on multiple factors."
-        description = """
-        Recommend the best flight from the available options, based on the details provided below:
-
-        **Reasoning for Recommendation:**
-        - **💰 Price:** Provide a detailed explanation about why this flight offers the best value compared to others.
-        - **⏱️ Duration:** Explain why this flight has the best duration in comparison to others.
-        - **🛑 Stops:** Discuss why this flight has minimal or optimal stops.
-        - **💺 Travel Class:** Describe why this flight provides the best comfort and amenities.
-
-        Use the provided flight data as the basis for your recommendation. Be sure to justify your choice using clear reasoning for each attribute. Do not repeat the flight details in your response.
-        """
-    elif data_type == "hotels":
-        role = "AI Hotel Analyst"
-        goal = "Analyze hotel options and recommend the best one considering price, rating, location, and amenities."
-        backstory = f"AI expert that provides in-depth analysis comparing hotel options based on multiple factors."
-        description = """
-        Based on the following analysis, generate a detailed recommendation for the best hotel. Your response should include clear reasoning based on price, rating, location, and amenities.
-
-        **🏆 AI Hotel Recommendation**
-        We recommend the best hotel based on the following analysis:
-
-        **Reasoning for Recommendation**:
-        - **💰 Price:** The recommended hotel is the best option for the price compared to others, offering the best value for the amenities and services provided.
-        - **⭐ Rating:** With a higher rating compared to the alternatives, it ensures a better overall guest experience. Explain why this makes it the best choice.
-        - **📍 Location:** The hotel is in a prime location, close to important attractions, making it convenient for travelers.
-        - **🛋️ Amenities:** The hotel offers amenities like Wi-Fi, pool, fitness center, free breakfast, etc. Discuss how these amenities enhance the experience, making it suitable for different types of travelers.
-
-        📝 **Reasoning Requirements**:
-        - Ensure that each section clearly explains why this hotel is the best option based on the factors of price, rating, location, and amenities.
-        - Compare it against the other options and explain why this one stands out.
-        - Provide concise, well-structured reasoning to make the recommendation clear to the traveler.
-        - Your recommendation should help a traveler make an informed decision based on multiple factors, not just one.
-        """
-    else:
-        raise ValueError("Invalid data type for AI recommendation")
-
-    # Create the agent and task
-    analyze_agent = Agent(
-        role=role,
-        goal=goal,
-        backstory=backstory,
-        llm=llm_model,
-        verbose=False
-    )
-
-    analyze_task = Task(
-        description=f"{description}\n\nData to analyze:\n{formatted_data}",
-        agent=analyze_agent,
-        expected_output=f"A structured recommendation explaining the best {data_type} choice based on the analysis of provided details."
-    )
-
-    analyst_crew = Crew(
-        agents=[analyze_agent],
-        tasks=[analyze_task],
-        process=Process.sequential,
-        verbose=False
-    )
-
-    try:
-        # Run the CrewAI analysis in a thread pool
-        crew_results = await asyncio.to_thread(analyst_crew.kickoff)
-
-        # Handle different possible return types from CrewAI
-        if hasattr(crew_results, 'outputs') and crew_results.outputs:
-            return crew_results.outputs[0]
-        elif hasattr(crew_results, 'get'):
-            return crew_results.get(role, f"No {data_type} recommendation available.")
-        else:
-            return str(crew_results)
-    except Exception as e:
-        logger.exception(f"Error in AI {data_type} analysis: {str(e)}")
-        return f"Unable to generate {data_type} recommendation due to an error."
-
-
-async def generate_itinerary(destination, flights_text, hotels_text, check_in_date, check_out_date):
-    """Generate a detailed travel itinerary based on flight and hotel information."""
-    try:
-        # Convert the string dates to datetime objects
-        check_in = datetime.strptime(check_in_date, "%Y-%m-%d")
-        check_out = datetime.strptime(check_out_date, "%Y-%m-%d")
-
-        # Calculate the difference in days
-        days = (check_out - check_in).days
-
-        llm_model = initialize_llm()
-
-        analyze_agent = Agent(
-            role="AI Travel Planner",
-            goal="Create a detailed itinerary for the user based on flight and hotel information",
-            backstory="AI travel expert generating a day-by-day itinerary including flight details, hotel stays, and must-visit locations in the destination.",
-            llm=llm_model,
-            verbose=False
-        )
-
-        analyze_task = Task(
-            description=f"""
-            Based on the following details, create a {days}-day itinerary for the user:
-
-            **Flight Details**:
-            {flights_text}
-
-            **Hotel Details**:
-            {hotels_text}
-
-            **Destination**: {destination}
-
-            **Travel Dates**: {check_in_date} to {check_out_date} ({days} days)
-
-            The itinerary should include:
-            - Flight arrival and departure information
-            - Hotel check-in and check-out details
-            - Day-by-day breakdown of activities
-            - Must-visit attractions and estimated visit times
-            - Restaurant recommendations for meals
-            - Tips for local transportation
-
-            📝 **Format Requirements**:
-            - Use markdown formatting with clear headings (# for main headings, ## for days, ### for sections)
-            - Include emojis for different types of activities (🏛️ for landmarks, 🍽️ for restaurants, etc.)
-            - Use bullet points for listing activities
-            - Include estimated timings for each activity
-            - Format the itinerary to be visually appealing and easy to read
-            """,
-            agent=analyze_agent,
-            expected_output="A well-structured, visually appealing itinerary in markdown format, including flight, hotel, and day-wise breakdown with emojis, headers, and bullet points."
-        )
-
-        itinerary_planner_crew = Crew(
-            agents=[analyze_agent],
-            tasks=[analyze_task],
-            process=Process.sequential,
-            verbose=False
-        )
-
-        crew_results = await asyncio.to_thread(itinerary_planner_crew.kickoff)
-
-        # Handle different possible return types from CrewAI
-        if hasattr(crew_results, 'outputs') and crew_results.outputs:
-            return crew_results.outputs[0]
-        elif hasattr(crew_results, 'get'):
-            return crew_results.get("AI Travel Planner", "No itinerary available.")
-        else:
-            return str(crew_results)
-
-    except Exception as e:
-        logger.exception(f"Error generating itinerary: {str(e)}")
-        return "Unable to generate itinerary due to an error. Please try again later."
-
-
-# ==============================================
-# 🚀 API Endpoints
-# ==============================================
+# --- API Endpoints ---
 @app.post("/search_flights/", response_model=AIResponse)
-async def get_flight_recommendations(flight_request: FlightRequest):
-    """Search flights and get AI recommendation."""
-    try:
-        # Search for flights
-        flights = await search_flights(flight_request)
-
-        # Handle errors
-        if isinstance(flights, dict) and "error" in flights:
-            raise HTTPException(status_code=400, detail=flights["error"])
-
-        if not flights:
-            raise HTTPException(status_code=404, detail="No flights found")
-
-        # Format flight data for AI
-        flights_text = format_travel_data("flights", flights)
-
-        # Get AI recommendation
-        ai_recommendation = await get_ai_recommendation("flights", flights_text)
-
-        # Return response
-        return AIResponse(
-            flights=flights,
-            ai_flight_recommendation=ai_recommendation
-        )
-    except HTTPException:
-        # Re-raise HTTP exceptions to preserve status codes
-        raise
-    except Exception as e:
-        logger.exception(f"Flight search endpoint error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Flight search error: {str(e)}")
-
+async def ep_search_flights(req: FlightRequest):
+    flights = await search_flights(req)
+    if isinstance(flights, dict): raise HTTPException(400, flights["error"])
+    if not flights: raise HTTPException(404, "No flights found")
+    agent = Agent(role="AI Flight Analyst", goal="Recommend the best flight.", backstory="An expert AI travel analyst.", llm=initialize_llm())
+    # --- THIS IS THE FIX ---
+    task = Task(
+        description=f"Analyze and recommend the best flight from the data based on price (INR) and convenience.\nData:\n{flights}",
+        agent=agent,
+        expected_output="A concise, single-paragraph recommendation for the best flight option." # Added required field
+    )
+    rec = await run_crew_task(agent, task)
+    return AIResponse(flights=flights, ai_flight_recommendation=str(rec))
 
 @app.post("/search_hotels/", response_model=AIResponse)
-async def get_hotel_recommendations(hotel_request: HotelRequest):
-    """Search hotels and get AI recommendation."""
-    try:
-        # Fetch hotel data
-        hotels = await search_hotels(hotel_request)
-
-        # Handle errors
-        if isinstance(hotels, dict) and "error" in hotels:
-            raise HTTPException(status_code=400, detail=hotels["error"])
-
-        if not hotels:
-            raise HTTPException(status_code=404, detail="No hotels found")
-
-        # Format hotel data for AI
-        hotels_text = format_travel_data("hotels", hotels)
-
-        # Get AI recommendation
-        ai_recommendation = await get_ai_recommendation("hotels", hotels_text)
-
-        # Return response
-        return AIResponse(
-            hotels=hotels,
-            ai_hotel_recommendation=ai_recommendation
-        )
-    except HTTPException:
-        # Re-raise HTTP exceptions to preserve status codes
-        raise
-    except Exception as e:
-        logger.exception(f"Hotel search endpoint error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Hotel search error: {str(e)}")
-
-
-@app.post("/complete_search/", response_model=AIResponse)
-async def complete_travel_search(flight_request: FlightRequest, hotel_request: Optional[HotelRequest] = None):
-    """Search for flights and hotels concurrently and get AI recommendations for both."""
-    try:
-        # If hotel request is not provided, create one from flight request
-        if hotel_request is None:
-            hotel_request = HotelRequest(
-                location=flight_request.destination,
-                check_in_date=flight_request.outbound_date,
-                check_out_date=flight_request.return_date
-            )
-
-        # Run flight and hotel searches concurrently
-        flight_task = asyncio.create_task(get_flight_recommendations(flight_request))
-        hotel_task = asyncio.create_task(get_hotel_recommendations(hotel_request))
-
-        # Wait for both tasks to complete
-        flight_results, hotel_results = await asyncio.gather(flight_task, hotel_task, return_exceptions=True)
-
-        # Check for exceptions
-        if isinstance(flight_results, Exception):
-            logger.error(f"Flight search failed: {str(flight_results)}")
-            flight_results = AIResponse(flights=[], ai_flight_recommendation="Could not retrieve flights.")
-
-        if isinstance(hotel_results, Exception):
-            logger.error(f"Hotel search failed: {str(hotel_results)}")
-            hotel_results = AIResponse(hotels=[], ai_hotel_recommendation="Could not retrieve hotels.")
-
-        # Format data for itinerary generation
-        flights_text = format_travel_data("flights", flight_results.flights)
-        hotels_text = format_travel_data("hotels", hotel_results.hotels)
-
-        # Generate itinerary if both searches were successful
-        itinerary = ""
-        if flight_results.flights and hotel_results.hotels:
-            itinerary = await generate_itinerary(
-                destination=flight_request.destination,
-                flights_text=flights_text,
-                hotels_text=hotels_text,
-                check_in_date=flight_request.outbound_date,
-                check_out_date=flight_request.return_date
-            )
-
-        # Combine results
-        return AIResponse(
-            flights=flight_results.flights,
-            hotels=hotel_results.hotels,
-            ai_flight_recommendation=flight_results.ai_flight_recommendation,
-            ai_hotel_recommendation=hotel_results.ai_hotel_recommendation,
-            itinerary=itinerary
-        )
-    except Exception as e:
-        logger.exception(f"Complete travel search error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Travel search error: {str(e)}")
-
+async def ep_search_hotels(req: HotelRequest):
+    hotels = await search_hotels(req)
+    if isinstance(hotels, dict): raise HTTPException(400, hotels["error"])
+    if not hotels: raise HTTPException(404, "No hotels found")
+    agent = Agent(role="AI Hotel Analyst", goal="Recommend the best hotel.", backstory="An expert AI travel analyst.", llm=initialize_llm())
+    # --- THIS IS THE FIX ---
+    task = Task(
+        description=f"Analyze and recommend the best hotel from the data based on price (INR), rating, and location.\nData:\n{hotels}",
+        agent=agent,
+        expected_output="A concise, single-paragraph recommendation for the best hotel option." # Added required field
+    )
+    rec = await run_crew_task(agent, task)
+    return AIResponse(hotels=hotels, ai_hotel_recommendation=str(rec))
 
 @app.post("/generate_itinerary/", response_model=AIResponse)
-async def get_itinerary(itinerary_request: ItineraryRequest):
-    """Generate an itinerary based on provided flight and hotel information."""
+async def ep_generate_itinerary(req: ItineraryRequest):
+    days = (datetime.strptime(req.check_out_date, "%Y-%m-%d") - datetime.strptime(req.check_in_date, "%Y-%m-%d")).days
+    agent = Agent(role="AI Travel Planner", goal="Create a detailed itinerary.", backstory="An expert travel planner.", llm=initialize_llm())
+    task = Task(
+        description=f"Create a {days}-day itinerary for {req.destination}. Use provided flight ({req.flights}) and hotel ({req.hotels}) info. Use markdown.",
+        agent=agent,
+        expected_output="A well-structured itinerary in markdown format."
+    )
+    itinerary = await run_crew_task(agent, task)
+    return AIResponse(itinerary=str(itinerary))
+
+@app.post("/complete_search/", response_model=AIResponse)
+async def ep_complete_search(req: FlightRequest):
+    hotel_req = HotelRequest(location=req.destination, check_in_date=req.outbound_date, check_out_date=req.return_date)
+    flight_task, hotel_task = asyncio.create_task(ep_search_flights(req)), asyncio.create_task(ep_search_hotels(hotel_req))
+    flight_res, hotel_res = await asyncio.gather(flight_task, hotel_task, return_exceptions=True)
+    final = AIResponse()
+    f_text, h_text = "Not available.", "Not available."
+    if not isinstance(flight_res, Exception): final.flights, final.ai_flight_recommendation, f_text = flight_res.flights, flight_res.ai_flight_recommendation, str(flight_res.flights)
+    if not isinstance(hotel_res, Exception): final.hotels, final.ai_hotel_recommendation, h_text = hotel_res.hotels, hotel_res.ai_hotel_recommendation, str(hotel_res.hotels)
+    if not isinstance(flight_res, Exception) and not isinstance(hotel_res, Exception):
+        final.itinerary = (await ep_generate_itinerary(ItineraryRequest(destination=req.destination, check_in_date=req.outbound_date, check_out_date=req.return_date, flights=f_text, hotels=h_text))).itinerary
+    return final
+
+@app.post("/parse_travel_query/", response_model=ParsedTravelDetails)
+async def ep_parse_travel_query(req: ParseQueryRequest):
     try:
-        itinerary = await generate_itinerary(
-            destination=itinerary_request.destination,
-            flights_text=itinerary_request.flights,
-            hotels_text=itinerary_request.hotels,
-            check_in_date=itinerary_request.check_in_date,
-            check_out_date=itinerary_request.check_out_date
-        )
-
-        return AIResponse(itinerary=itinerary)
+        today = datetime.now()
+        prompt = f"""
+        You are a precise information extraction AI. From the user's query, extract travel details and return ONLY a JSON object.
+        Current date is {today.strftime('%Y-%m-%d')}.
+        CRITICAL RULE: If any piece of information is NOT in the query, you MUST use a `null` value. Do not guess.
+        QUERY: "{req.query}"
+        Fields: "origin", "destination", "outbound_date" (YYYY-MM-DD), "days" (integer).
+        For dates, if no year is given, use {today.year} unless the date has passed, then use {today.year + 1}.
+        Example for "mumbai to udaipur": {{"origin": "Mumbai", "destination": "Udaipur", "outbound_date": null, "days": null}}
+        """
+        agent = Agent(role="Query Parser", goal="Extract info precisely.", backstory="An expert in parsing queries without assuming.", llm=initialize_llm())
+        task = Task(description=prompt, agent=agent, expected_output="A valid JSON with null for missing fields.")
+        results = await run_crew_task(agent, task)
+        json_str = re.search(r'\{.*\}', str(results), re.DOTALL)
+        if not json_str: return ParsedTravelDetails(success=False, error="No JSON found.")
+        data = json.loads(json_str.group(0)); data["success"] = True
+        return ParsedTravelDetails(**data)
     except Exception as e:
-        logger.exception(f"Itinerary generation error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Itinerary generation error: {str(e)}")
+        logger.error(f"Error parsing query: {e}")
+        return ParsedTravelDetails(success=False, error=str(e))
 
+@app.post("/general_travel_query/", response_model=AIResponse)
+async def ep_general_travel_query(req: GeneralQueryRequest):
+    logger.info(f"Handling general query: {req.query}")
+    agent = Agent(
+        role="Friendly Travel Assistant AI",
+        goal="Answer the user's question clearly. If the question is about your identity, introduce yourself as an AI travel planner.",
+        backstory="You are a helpful AI assistant. Your purpose is to help users plan trips or answer their questions.",
+        llm=initialize_llm()
+    )
+    task = Task(
+        description=f"A user asks: '{req.query}'. Formulate a helpful, direct response.",
+        agent=agent,
+        expected_output="A friendly and helpful answer. For a question like 'what are you', the answer MUST be 'I am an AI travel planner, here to help you organize your trip!'."
+    )
+    answer = await run_crew_task(agent, task)
+    final_answer = str(answer).strip()
+    if not final_answer or final_answer.lower() == req.query.lower():
+        final_answer = "I am an AI travel planner, built to help you organize your trip. To get started, you can tell me where you'd like to go."
+    return AIResponse(general_answer=final_answer)
 
-# ==============================================
-# 🌐 Run FastAPI Server
-# ==============================================
+# --- Server Execution ---
 if __name__ == "__main__":
-    logger.info("Starting Travel Planning API server")
     uvicorn.run(app, host="0.0.0.0", port=8000)

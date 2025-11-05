@@ -1,237 +1,171 @@
 import streamlit as st
 import requests
+import re
 from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
 
-# API URLs
+# --- API Configuration ---
 API_BASE_URL = "http://localhost:8000"
-API_URL_FLIGHTS = f"{API_BASE_URL}/search_flights/"
-API_URL_HOTELS = f"{API_BASE_URL}/search_hotels/"
-API_URL_COMPLETE = f"{API_BASE_URL}/complete_search/"
-API_URL_ITINERARY = f"{API_BASE_URL}/generate_itinerary/"
+API_URLS = {
+    "flights": f"{API_BASE_URL}/search_flights/",
+    "hotels": f"{API_BASE_URL}/search_hotels/",
+    "itinerary": f"{API_BASE_URL}/generate_itinerary/",
+    "complete": f"{API_BASE_URL}/complete_search/",
+    "parse": f"{API_BASE_URL}/parse_travel_query/",
+    "general": f"{API_BASE_URL}/general_travel_query/"
+}
 
-# Page configuration
-st.set_page_config(
-    page_title="✈️  Travel Planner",
-    page_icon="✈️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- Page Setup & Session State ---
+st.set_page_config(page_title="AI Travel Planner", page_icon="✈️", layout="wide")
 
-# Sidebar for additional options
+def init_session_state():
+    for key, value in {
+        "messages": [], "travel_data": {}, "stage": "gathering_info",
+        "last_question": None, "search_results": {} # search_results is still useful for context
+    }.items():
+        if key not in st.session_state: st.session_state[key] = value
+
+# --- Helper Functions ---
+def call_api(url: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        response = requests.post(url, json=payload, timeout=90) # Increased timeout for long tasks
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Connection Error: Is the backend running? Details: {e}")
+    except Exception as e:
+        st.error(f"An API error occurred: {e}")
+    return None
+
+def format_date(d: Optional[datetime]) -> Optional[str]: return d.strftime("%Y-%m-%d") if d else None
+
+def extract_number(t: str) -> Optional[int]:
+    n = re.findall(r'\d+', t.replace(',', ''))
+    if n:
+        num = int(n[0])
+        return num * 1000 if 'k' in t.lower() else num
+    return None
+
+# --- UI Display Components ---
+def display_results_in_chat(results: Dict[str, Any]):
+    """Renders the results directly in the chat message container."""
+    if not results: return
+    if results.get("flights"):
+        st.markdown("---"); st.markdown("##### ✈️ Top Flight Options")
+        cols = st.columns(min(3, len(results["flights"])))
+        for i, flight in enumerate(results["flights"][:3]):
+            with cols[i]:
+                with st.container(border=True):
+                    st.image(flight.get('airline_logo', ''), width=30)
+                    st.markdown(f"**{flight.get('airline', 'N/A')}** | ₹{flight.get('price', 'N/A')}")
+                    st.caption(f"{flight.get('duration')} | {flight.get('stops')}")
+        if results.get("ai_flight_recommendation"):
+            with st.expander("**AI Flight Recommendation**"): st.markdown(results["ai_flight_recommendation"])
+    if results.get("hotels"):
+        st.markdown("---"); st.markdown("##### 🏨 Top Hotel Options")
+        cols = st.columns(min(3, len(results["hotels"])))
+        for i, hotel in enumerate(results["hotels"][:3]):
+            with cols[i]:
+                with st.container(border=True):
+                    st.markdown(f"**{hotel.get('name', 'N/A')}**")
+                    st.markdown(f"**₹{hotel.get('price', 'N/A')}/night** | {hotel.get('rating', 'N/A')} ⭐")
+                    st.link_button("View Hotel", hotel.get('link', '#'))
+        if results.get("ai_hotel_recommendation"):
+            with st.expander("**AI Hotel Recommendation**"): st.markdown(results["ai_hotel_recommendation"])
+    if results.get("itinerary"):
+        st.markdown("---"); st.markdown("##### 🗺️ Your Travel Itinerary")
+        st.markdown(results["itinerary"])
+
+# --- Core Logic ---
+def process_user_input(user_input: str):
+    data = st.session_state.travel_data; last_q = st.session_state.last_question
+    if last_q == "num_people": data["num_people"] = extract_number(user_input)
+    elif last_q == "budget": data["budget_per_person"] = extract_number(user_input)
+
+    with st.spinner("Thinking..."): parsed_data = call_api(API_URLS["parse"], {"query": user_input})
+    if parsed_data and parsed_data.get("success"):
+        data.update({k: v for k, v in parsed_data.items() if v is not None})
+        if parsed_data.get("outbound_date"):
+            try: data["outbound_date"] = datetime.strptime(parsed_data["outbound_date"], "%Y-%m-%d")
+            except (ValueError, TypeError): pass
+    if data.get("outbound_date") and data.get("days") and not data.get("return_date"):
+        data["return_date"] = data["outbound_date"] + timedelta(days=int(data["days"]))
+
+def get_next_response() -> str:
+    data = st.session_state.travel_data
+    prompts = [
+        (not data.get("destination"), "destination", "Hello! I'm your AI travel planner. To get started, where would you like to travel?"),
+        (not data.get("origin"), "origin", f"Great, a trip to {data.get('destination')}! Where will you be travelling from?"),
+        (not data.get("outbound_date") or not data.get("days"), "dates", "Sounds good. When do you want to go and for how long? (e.g., 'January 24th for 3 days 2026')"),
+        (not data.get("num_people"), "num_people", "Perfect. How many people are traveling?"),
+        (not data.get("budget_per_person"), "budget", "Almost there! What's your rough budget per person in INR?"),
+    ]
+    for condition, question, prompt in prompts:
+        if condition: st.session_state.last_question = question; return prompt
+    st.session_state.stage = "info_gathered"; st.session_state.last_question = None
+    return "Awesome, I have all the details. What would you like to do? You can ask for **flights**, **hotels**, an **itinerary**, or a **complete travel plan**."
+
+def handle_planning_request(user_input: str):
+    data = st.session_state.travel_data
+    if any(cmd in user_input.lower() for cmd in ["flight", "hotel", "itinerary", "complete"]) and not data.get("outbound_date"):
+        st.session_state.messages.append({"role": "assistant", "content": "I need your travel dates first. When would you like to go?"})
+        st.session_state.last_question = "dates"; return
+
+    def get_api_results(task_name: str, url: str, payload: dict) -> Optional[dict]:
+        with st.spinner(f"AI is working on your {task_name}..."):
+            results = call_api(url, payload)
+            primary_key = task_name.split(' ')[0]
+            if not (results and results.get(primary_key)):
+                 st.error(f"Sorry, I couldn't find any {task_name}. Please try different criteria."); return None
+            return results
+
+    commands = {
+        "flight": ("flights", API_URLS["flights"], {"origin": data.get("origin"), "destination": data.get("destination"), "outbound_date": format_date(data.get("outbound_date")), "return_date": format_date(data.get("return_date"))}),
+        "hotel": ("hotels", API_URLS["hotels"], {"location": data.get("destination"), "check_in_date": format_date(data.get("outbound_date")), "check_out_date": format_date(data.get("return_date"))}),
+        "itinerary": ("itinerary", API_URLS["itinerary"], {"destination": data.get("destination"), "check_in_date": format_date(data.get("outbound_date")), "check_out_date": format_date(data.get("return_date")), "flights": str(st.session_state.search_results.get("flights", "")), "hotels": str(st.session_state.search_results.get("hotels", ""))}),
+        "complete": ("complete plan", API_URLS["complete"], {"flight_request": {"origin": data.get("origin"), "destination": data.get("destination"), "outbound_date": format_date(data.get("outbound_date")), "return_date": format_date(data.get("return_date"))}})
+    }
+    for keyword, (task_name, url, payload) in commands.items():
+        if keyword in user_input.lower():
+            if results := get_api_results(task_name, url, payload):
+                st.session_state.search_results.update(results)
+                st.session_state.messages.append({"role": "assistant", "content": f"Here are the {task_name} I found for your trip:", "results": results})
+            return
+
+    if results := get_api_results("answer", API_URLS["general"], {"destination": data.get("destination", "general"), "query": user_input}):
+        if results.get("general_answer"): st.session_state.messages.append({"role": "assistant", "content": results["general_answer"]})
+
+# --- Main App ---
+init_session_state()
+
 with st.sidebar:
-    st.title("⚙️ Options")
-    search_mode = st.radio(
-        "Search Mode",
-        ["Complete (Flights + Hotels + Itinerary)", "Flights Only", "Hotels Only"]
-    )
+    st.title("AI Travel Planner")
+    if st.button("Start New Plan", use_container_width=True): st.session_state.clear(); st.rerun()
+    st.markdown("---"); data = st.session_state.travel_data
+    st.markdown(f"**To:** {data.get('destination', '...')}"); st.markdown(f"**From:** {data.get('origin', '...')}")
+    st.markdown(f"**When:** {format_date(data.get('outbound_date')) or '...'} ({data.get('days')} days)")
+    st.markdown(f"**Who:** {data.get('num_people')} travelers"); st.markdown(f"**Budget:** ₹{data.get('budget_per_person') or '...'}/person")
 
-    st.markdown("---")
- 
+st.header("Chat with the AI Travel Planner")
 
-# Main header
-st.title("✈️ AI-Powered Travel Planner")
-st.markdown("""
-    **Find flights, hotels, and get personalized recommendations with AI! Create your perfect travel itinerary in seconds.**
-""")
+if not st.session_state.messages:
+    st.session_state.messages.append({"role": "assistant", "content": "Hello! I'm your AI travel planner, ready to help you organize the perfect trip. To get started, where would you like to travel?"})
 
-# Travel search form
-with st.form(key="travel_search_form"):
-    cols = st.columns([1, 1])
+# New Display Loop: Renders results as part of the message history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if "results" in message:
+            display_results_in_chat(message["results"])
 
-    with cols[0]:
-        st.subheader("🛫 Flight Details")
-        origin = st.text_input("Departure City or Airport Code", "Mumbai", help="Enter city name (e.g., Mumbai, New York) or IATA code (e.g., BOM, JFK)")
-        destination = st.text_input("Arrival City or Airport Code", "Hyderabad", help="Enter city name (e.g., Hyderabad, Los Angeles) or IATA code (e.g., HYD, LAX)")
+if user_input := st.chat_input("Your message..."):
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
-        # Set default dates (departure tomorrow, return in 7 days)
-        tomorrow = datetime.now() + timedelta(days=1)
-        next_week = tomorrow + timedelta(days=7)
-
-        outbound_date = st.date_input("Departure Date", tomorrow)
-        return_date = st.date_input("Return Date", next_week)
-
-    with cols[1]:
-        st.subheader("🏨 Hotel Details")
-        use_flight_destination = st.checkbox("Use flight destination for hotel", value=True)
-
-        if use_flight_destination:
-            location = destination
-            st.info(f"Using flight destination ({destination}) for hotel search")
-        else:
-            location = st.text_input("Hotel Location", "")
-
-        check_in_date = st.date_input("Check-In Date", outbound_date)
-        check_out_date = st.date_input("Check-Out Date", return_date)
-
-    # Submit button
-    submit_col1, submit_col2 = st.columns([3, 1])
-    with submit_col2:
-        submit_button = st.form_submit_button("🔍 Search", use_container_width=True)
-
-# Handle form submission
-if submit_button:
-    # Validate inputs
-    if not origin or not destination:
-        st.error("Please provide both origin and destination cities or airports.")
-    elif outbound_date >= return_date:
-        st.error("Return date must be after departure date.")
-    elif check_in_date >= check_out_date:
-        st.error("Check-out date must be after check-in date.")
-    else:
-        # Prepare request data
-        flight_data = {
-            "origin": origin,
-            "destination": destination,
-            "outbound_date": str(outbound_date),
-            "return_date": str(return_date)
-        }
-
-        hotel_data = {
-            "location": location,
-            "check_in_date": str(check_in_date),
-            "check_out_date": str(check_out_date)
-        }
-
-        # Show loading spinner
-        with st.spinner("Searching for the perfect travel options for you..."):
-            try:
-                # Choose API endpoint based on selected mode
-                if search_mode == "Complete (Flights + Hotels + Itinerary)":
-                    # Use the new optimized endpoint for complete search
-                    # Structure the request with nested flight_request and hotel_request objects
-                    complete_data = {
-                        "flight_request": flight_data,
-                        "hotel_request": hotel_data
-                    }
-                    response = requests.post(API_URL_COMPLETE, json=complete_data)
-                    if response.status_code == 200:
-                        result = response.json()
-                        flights = result.get("flights", [])
-                        hotels = result.get("hotels", [])
-                        ai_flight_recommendation = result.get("ai_flight_recommendation", "")
-                        ai_hotel_recommendation = result.get("ai_hotel_recommendation", "")
-                        itinerary = result.get("itinerary", "")
-                    else:
-                        st.error(f"Error: {response.json().get('detail', 'Unknown error')}")
-                        st.stop()
-
-                elif search_mode == "Flights Only":
-                    response = requests.post(API_URL_FLIGHTS, json=flight_data)
-                    if response.status_code == 200:
-                        result = response.json()
-                        flights = result.get("flights", [])
-                        ai_flight_recommendation = result.get("ai_flight_recommendation", "")
-                        hotels = []
-                        ai_hotel_recommendation = ""
-                        itinerary = ""
-                    else:
-                        st.error(f"Flight Search Error: {response.json().get('detail', 'Unknown error')}")
-                        st.stop()
-
-                elif search_mode == "Hotels Only":
-                    response = requests.post(API_URL_HOTELS, json=hotel_data)
-                    if response.status_code == 200:
-                        result = response.json()
-                        hotels = result.get("hotels", [])
-                        ai_hotel_recommendation = result.get("ai_hotel_recommendation", "")
-                        flights = []
-                        ai_flight_recommendation = ""
-                        itinerary = ""
-                    else:
-                        st.error(f"Hotel Search Error: {response.json().get('detail', 'Unknown error')}")
-                        st.stop()
-
-            except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
-                st.stop()
-
-        # Display results in tabs
-        if search_mode == "Flights Only":
-            tabs = st.tabs(["✈️ Flights", "🏆 AI Recommendation"])
-        elif search_mode == "Hotels Only":
-            tabs = st.tabs(["🏨 Hotels", "🏆 AI Recommendation"])
-        else:
-            tabs = st.tabs(["✈️ Flights", "🏨 Hotels", "🏆 AI Recommendations", "📅 Itinerary"])
-
-        # Flights tab
-        if search_mode != "Hotels Only":
-            with tabs[0]:
-                st.subheader(f"✈️ Available Flights from {origin} to {destination}")
-
-                if flights:
-                    # Create two columns for flight cards
-                    flight_cols = st.columns(2)
-
-                    for i, flight in enumerate(flights):
-                        col_idx = i % 2
-                        with flight_cols[col_idx]:
-                            with st.container(border=True):
-                                st.markdown(f"""
-                                ### ✈️ {flight['airline']} - {flight['stops']} Flight
-
-                                🕒 **Departure**: {flight['departure']}  
-                                🕘 **Arrival**: {flight['arrival']}  
-                                ⏱️ **Duration**: {flight['duration']}  
-                                💰 **Price**: **${flight['price']}**  
-                                💺 **Class**: {flight['travel_class']}
-                                """)
-                                st.button(f"🔖 Select This Flight", key=f"flight_{i}")
-                else:
-                    st.info("No flights found for your search criteria.")
-
-        # Hotels tab
-        if search_mode != "Flights Only":
-            with tabs[1 if search_mode == "Hotels Only" else 1]:
-                st.subheader(f"🏨 Available Hotels in {location}")
-
-                if hotels:
-                    # Create columns for hotel cards
-                    hotel_cols = st.columns(3)
-
-                    for i, hotel in enumerate(hotels):
-                        col_idx = i % 3
-                        with hotel_cols[col_idx]:
-                            with st.container(border=True):
-                                st.markdown(f"""
-                                ### 🏨 {hotel['name']}
-
-                                💰 **Price**: ${hotel['price']} per night  
-                                ⭐ **Rating**: {hotel['rating']}  
-                                📍 **Location**: {hotel['location']}
-                                """)
-                                cols = st.columns([1, 1])
-                                with cols[0]:
-                                    st.button(f"🔖 Select", key=f"hotel_{i}")
-                                with cols[1]:
-                                    st.link_button("🔗 Details", hotel['link'])
-                else:
-                    st.info("No hotels found for your search criteria.")
-
-        # AI Recommendations tab
-        recommendation_tab_index = 1 if search_mode in ["Flights Only", "Hotels Only"] else 2
-        with tabs[recommendation_tab_index]:
-            if search_mode != "Hotels Only" and ai_flight_recommendation:
-                st.subheader("✈️ AI Flight Recommendation")
-                with st.container(border=True):
-                    st.markdown(ai_flight_recommendation)
-
-            if search_mode != "Flights Only" and ai_hotel_recommendation:
-                st.subheader("🏨 AI Hotel Recommendation")
-                with st.container(border=True):
-                    st.markdown(ai_hotel_recommendation)
-
-        # Itinerary tab
-        if search_mode == "Complete (Flights + Hotels + Itinerary)" and itinerary:
-            with tabs[3]:
-                st.subheader("📅 Your Travel Itinerary")
-                with st.container(border=True):
-                    st.markdown(itinerary)
-
-                # Download button for itinerary
-                st.download_button(
-                    label="📥 Download Itinerary",
-                    data=itinerary,
-                    file_name=f"travel_itinerary_{destination}_{outbound_date}.md",
-                    mime="text/markdown"
-                )
-
+    if st.session_state.stage == "gathering_info":
+        process_user_input(user_input)
+        bot_response = get_next_response()
+        st.session_state.messages.append({"role": "assistant", "content": bot_response})
+    else: # Stage is 'info_gathered' or 'results_displayed'
+        handle_planning_request(user_input)
+        
+    st.rerun()
