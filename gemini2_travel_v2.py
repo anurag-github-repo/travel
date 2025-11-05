@@ -12,11 +12,8 @@ from crewai import Agent, Task, Crew
 from datetime import datetime, timedelta
 from functools import lru_cache
 
-# Load API Keys
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyA2C2-YB43Mra_cleDmrblCJ-JSzd2cPfk")
 SERP_API_KEY = os.getenv("SERP_API_KEY", "0c05012f41e43d4f77923b240810779b7251f4b12b3fcc08368d79c195bbc5a5")
-
-# Initialize Logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -24,29 +21,30 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def initialize_llm():
     from crewai import LLM
-    return LLM(model="gemini/gemini-2.5-flash-lite", api_key=GEMINI_API_KEY)
+    return LLM(model="gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
 
 # --- Pydantic Models ---
 class FlightRequest(BaseModel): origin: str; destination: str; outbound_date: str; return_date: str
 class HotelRequest(BaseModel): location: str; check_in_date: str; check_out_date: str
 class ItineraryRequest(BaseModel): destination: str; check_in_date: str; check_out_date: str; flights: str; hotels: str
 class GeneralQueryRequest(BaseModel): destination: str; query: str
+class CommandRequest(BaseModel): query: str
 class FlightInfo(BaseModel): airline: str; price: str; duration: str; stops: str; departure: str; arrival: str; travel_class: str; return_date: str; airline_logo: str
 class HotelInfo(BaseModel): name: str; price: str; rating: float; location: str; link: str
 class AIResponse(BaseModel):
     flights: List[FlightInfo] = Field(default_factory=list); hotels: List[HotelInfo] = Field(default_factory=list)
     ai_flight_recommendation: str = ""; ai_hotel_recommendation: str = ""
-    itinerary: str = ""; general_answer: Optional[str] = None
+    itinerary: str = ""; general_answer: Optional[str] = None; command: Optional[str] = None
 class ParseQueryRequest(BaseModel): query: str
 class ParsedTravelDetails(BaseModel):
     origin: Optional[str] = None; destination: Optional[str] = None
     outbound_date: Optional[str] = None; days: Optional[int] = None
     success: bool = False; error: Optional[str] = None
 
-app = FastAPI(title="Travel Planning API", version="1.7.0")
+app = FastAPI(title="Travel Planning API", version="2.0.0-Final")
 
 # --- IATA Code Handling ---
-CITY_TO_IATA = { "mumbai": "BOM", "hyderabad": "HYD", "delhi": "DEL", "bangalore": "BLR", "chennai": "MAA", "kolkata": "CCU", "pune": "PNQ", "goa": "GOI", "ahmedabad": "AMD", "kochi": "COK", "jaipur": "JAI", "udaipur": "UDR", "vadodara": "BDQ" }
+CITY_TO_IATA = { "mumbai": "BOM", "vadodara": "BDQ", "dubai": "DXB", "switzerland": "ZRH", "hyderabad": "HYD", "delhi": "DEL", "goa": "GOI" }
 
 async def run_search(params):
     try: return await asyncio.to_thread(lambda: GoogleSearch(params).get_dict())
@@ -94,9 +92,8 @@ async def search_hotels(req: HotelRequest):
         "rating": h.get("overall_rating", 0.0), "location": h.get("location", "N/A"), "link": h.get("link", "#")
     }) for h in res.get("properties", [])]
 
-# --- AI Crew Tasks ---
+# --- AI Crew Task Execution ---
 async def run_crew_task(agent, task):
-    # --- THIS IS THE FIX ---
     crew = Crew(agents=[agent], tasks=[task], verbose=False, share_crew=False)
     return await asyncio.to_thread(crew.kickoff)
 
@@ -107,12 +104,7 @@ async def ep_search_flights(req: FlightRequest):
     if isinstance(flights, dict): raise HTTPException(400, flights["error"])
     if not flights: raise HTTPException(404, "No flights found")
     agent = Agent(role="AI Flight Analyst", goal="Recommend the best flight.", backstory="An expert AI travel analyst.", llm=initialize_llm())
-    # --- THIS IS THE FIX ---
-    task = Task(
-        description=f"Analyze and recommend the best flight from the data based on price (INR) and convenience.\nData:\n{flights}",
-        agent=agent,
-        expected_output="A concise, single-paragraph recommendation for the best flight option." # Added required field
-    )
+    task = Task(description=f"Analyze and recommend the best flight from the data based on price (INR) and convenience.\nData:\n{flights}", agent=agent, expected_output="A concise recommendation.")
     rec = await run_crew_task(agent, task)
     return AIResponse(flights=flights, ai_flight_recommendation=str(rec))
 
@@ -122,12 +114,7 @@ async def ep_search_hotels(req: HotelRequest):
     if isinstance(hotels, dict): raise HTTPException(400, hotels["error"])
     if not hotels: raise HTTPException(404, "No hotels found")
     agent = Agent(role="AI Hotel Analyst", goal="Recommend the best hotel.", backstory="An expert AI travel analyst.", llm=initialize_llm())
-    # --- THIS IS THE FIX ---
-    task = Task(
-        description=f"Analyze and recommend the best hotel from the data based on price (INR), rating, and location.\nData:\n{hotels}",
-        agent=agent,
-        expected_output="A concise, single-paragraph recommendation for the best hotel option." # Added required field
-    )
+    task = Task(description=f"Analyze and recommend the best hotel from the data based on price (INR), rating, and location.\nData:\n{hotels}", agent=agent, expected_output="A concise recommendation.")
     rec = await run_crew_task(agent, task)
     return AIResponse(hotels=hotels, ai_hotel_recommendation=str(rec))
 
@@ -135,11 +122,7 @@ async def ep_search_hotels(req: HotelRequest):
 async def ep_generate_itinerary(req: ItineraryRequest):
     days = (datetime.strptime(req.check_out_date, "%Y-%m-%d") - datetime.strptime(req.check_in_date, "%Y-%m-%d")).days
     agent = Agent(role="AI Travel Planner", goal="Create a detailed itinerary.", backstory="An expert travel planner.", llm=initialize_llm())
-    task = Task(
-        description=f"Create a {days}-day itinerary for {req.destination}. Use provided flight ({req.flights}) and hotel ({req.hotels}) info. Use markdown.",
-        agent=agent,
-        expected_output="A well-structured itinerary in markdown format."
-    )
+    task = Task(description=f"Create a {days}-day itinerary for {req.destination}. Use flight ({req.flights}) and hotel ({req.hotels}) info. Use markdown.", agent=agent, expected_output="A structured itinerary.")
     itinerary = await run_crew_task(agent, task)
     return AIResponse(itinerary=str(itinerary))
 
@@ -161,11 +144,11 @@ async def ep_parse_travel_query(req: ParseQueryRequest):
     try:
         today = datetime.now()
         prompt = f"""
-        You are a precise information extraction AI. From the user's query, extract travel details and return ONLY a JSON object.
+        You are a precise information extraction AI. From the query, extract details and return ONLY a JSON object.
         Current date is {today.strftime('%Y-%m-%d')}.
         CRITICAL RULE: If any piece of information is NOT in the query, you MUST use a `null` value. Do not guess.
         QUERY: "{req.query}"
-        Fields: "origin", "destination", "outbound_date" (YYYY-MM-DD), "days" (integer).
+        Fields: "origin", "destination", "outbound_date" (YYYY-MM-DD), "days".
         For dates, if no year is given, use {today.year} unless the date has passed, then use {today.year + 1}.
         Example for "mumbai to udaipur": {{"origin": "Mumbai", "destination": "Udaipur", "outbound_date": null, "days": null}}
         """
@@ -183,22 +166,35 @@ async def ep_parse_travel_query(req: ParseQueryRequest):
 @app.post("/general_travel_query/", response_model=AIResponse)
 async def ep_general_travel_query(req: GeneralQueryRequest):
     logger.info(f"Handling general query: {req.query}")
-    agent = Agent(
-        role="Friendly Travel Assistant AI",
-        goal="Answer the user's question clearly. If the question is about your identity, introduce yourself as an AI travel planner.",
-        backstory="You are a helpful AI assistant. Your purpose is to help users plan trips or answer their questions.",
-        llm=initialize_llm()
-    )
-    task = Task(
-        description=f"A user asks: '{req.query}'. Formulate a helpful, direct response.",
-        agent=agent,
-        expected_output="A friendly and helpful answer. For a question like 'what are you', the answer MUST be 'I am an AI travel planner, here to help you organize your trip!'."
-    )
+    agent = Agent(role="Friendly Travel Assistant AI", goal="Answer the user's question clearly.", backstory="You are a helpful AI assistant. Your purpose is to help users plan trips or answer their questions.", llm=initialize_llm())
+    task = Task(description=f"A user asks: '{req.query}'. Formulate a helpful, direct response. If asked about your identity, say 'I am an AI travel planner, here to help you organize your trip!'.", agent=agent, expected_output="A friendly and helpful answer.")
     answer = await run_crew_task(agent, task)
     final_answer = str(answer).strip()
     if not final_answer or final_answer.lower() == req.query.lower():
         final_answer = "I am an AI travel planner, built to help you organize your trip. To get started, you can tell me where you'd like to go."
     return AIResponse(general_answer=final_answer)
+
+@app.post("/parse_command/", response_model=AIResponse)
+async def ep_parse_command(req: CommandRequest):
+    logger.info(f"Classifying command: {req.query}")
+    agent = Agent(role="Command Classifier", goal="Accurately classify the user's request.", backstory="You are an AI that understands natural language and categorizes user requests for a travel application.", llm=initialize_llm())
+    task = Task(
+        description=f"""
+        Analyze the user's request: "{req.query}". Classify it into ONE of the following categories:
+        - flights, - hotels, - itinerary, - complete_plan, - general_question
+        Examples: "show me some flights" -> flights; "where can I stay?" -> hotels;
+        "can u tell me interaries" -> itinerary; "give me the full plan" -> complete_plan;
+        "what's the weather like?" -> general_question
+        Respond with ONLY the category name.
+        """,
+        agent=agent, expected_output="A single word representing the command category."
+    )
+    command = await run_crew_task(agent, task)
+    clean_command = str(command).strip().lower().replace("_", "")
+    valid_commands = ["flights", "hotels", "itinerary", "completeplan", "generalquestion"]
+    if clean_command not in valid_commands:
+        clean_command = "generalquestion"
+    return AIResponse(command=clean_command.replace("plan", "_plan").replace("question", "_question"))
 
 # --- Server Execution ---
 if __name__ == "__main__":
