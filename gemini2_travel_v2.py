@@ -96,7 +96,8 @@ async def search_hotels(req: HotelRequest):
 
 # --- AI Crew Tasks ---
 async def run_crew_task(agent, task):
-    crew = Crew(agents=[agent], tasks=[task], verbose=False)
+    # --- THIS IS THE FIX ---
+    crew = Crew(agents=[agent], tasks=[task], verbose=False, share_crew=False)
     return await asyncio.to_thread(crew.kickoff)
 
 # --- API Endpoints ---
