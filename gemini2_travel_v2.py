@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def initialize_llm():
     from crewai import LLM
-    return LLM(model="gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
+    return LLM(model="gemini/gemini-2.5-flash-lite", api_key=GEMINI_API_KEY)
 
 # --- Pydantic Models ---
 class FlightRequest(BaseModel): origin: str; destination: str; outbound_date: str; return_date: str
