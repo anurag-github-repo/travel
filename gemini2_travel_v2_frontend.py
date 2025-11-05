@@ -49,7 +49,7 @@ def extract_number(t: str) -> Optional[int]:
 # --- UI Display Components ---
 def display_results_in_chat(results: Dict[str, Any]):
     if not results: return
-    # (The UI display functions are correct and remain unchanged)
+    # (UI display functions are correct and remain unchanged)
     if results.get("flights"):
         st.markdown("---"); st.markdown("##### ✈️ Top Flight Options")
         cols = st.columns(min(3, len(results["flights"])))
@@ -159,27 +159,22 @@ for message in st.session_state.messages:
 if user_input := st.chat_input("Your message..."):
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # --- THIS IS THE NEW, SMARTER LOGIC BLOCK ---
     if st.session_state.stage == "gathering_info":
         with st.spinner("Thinking..."):
             parsed_data = call_api(API_URLS["parse"], {"query": user_input})
         
-        # Determine user's intent
         is_travel_query = parsed_data and parsed_data.get("success") and any(parsed_data.get(k) for k in ["origin", "destination", "outbound_date", "days"])
 
         if is_travel_query:
-            # Intent A: User is providing travel info
             process_user_input(user_input, parsed_data)
             st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
         else:
-            # Intent B: User is asking a general question
+            # --- THIS IS THE FIX ---
+            # The "aggressive nudge" has been removed. The bot now only answers the question and waits.
             with st.spinner("..."):
                 if results := call_api(API_URLS["general"], {"destination": "general", "query": user_input}):
-                    st.session_state.messages.append({"role": "assistant", "content": results.get("general_answer")})
-                    # Nudge them back to planning
-                    if st.session_state.stage == "gathering_info":
-                         st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
-    else: # Stage is 'info_gathered' or 'results_displayed'
+                    st.session_state.messages.append({"role": "assistant", "content": results.get("general_answer", "I'm sorry, I'm not sure how to answer that. Let's get back to planning your trip. Where would you like to go?")})
+    else:
         handle_planning_request(user_input)
         
     st.rerun()
