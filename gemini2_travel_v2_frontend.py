@@ -12,17 +12,15 @@ API_URLS = {
     "itinerary": f"{API_BASE_URL}/generate_itinerary/",
     "complete": f"{API_BASE_URL}/complete_search/",
     "parse": f"{API_BASE_URL}/parse_travel_query/",
-    "general": f"{API_BASE_URL}/general_travel_query/"
+    "general": f"{API_BASE_URL}/general_travel_query/",
+    "parse_command": f"{API_BASE_URL}/parse_command/"
 }
 
 # --- Page Setup & Session State ---
 st.set_page_config(page_title="AI Travel Planner", page_icon="✈️", layout="wide")
 
 def init_session_state():
-    for key, value in {
-        "messages": [], "travel_data": {}, "stage": "gathering_info",
-        "last_question": None, "search_results": {}
-    }.items():
+    for key, value in {"messages": [], "travel_data": {}, "stage": "gathering_info", "last_question": None, "search_results": {}}.items():
         if key not in st.session_state: st.session_state[key] = value
 
 # --- Helper Functions ---
@@ -43,18 +41,14 @@ def extract_number(t: str) -> Optional[int]:
     n = re.findall(r'\d+', t.replace(',', ''))
     if n:
         num = int(n[0])
-        # Handle "lakh" and "k" for budget/number entries
-        if 'lakh' in t.lower():
-            return num * 100000
-        if 'k' in t.lower():
-            return num * 1000
+        if 'lakh' in t.lower(): return num * 100000
+        if 'k' in t.lower(): return num * 1000
         return num
     return None
 
 # --- UI Display Components ---
 def display_results_in_chat(results: Dict[str, Any]):
     if not results: return
-    # (UI display functions are correct and remain unchanged)
     if results.get("flights"):
         st.markdown("---"); st.markdown("##### ✈️ Top Flight Options")
         cols = st.columns(min(3, len(results["flights"])))
@@ -84,12 +78,9 @@ def display_results_in_chat(results: Dict[str, Any]):
 # --- Core Logic ---
 def process_user_input(user_input: str, parsed_data: Optional[Dict] = None):
     data = st.session_state.travel_data; last_q = st.session_state.last_question
-    
-    # Directly handle answers to specific non-parsing questions
     if last_q == "num_people": data["num_people"] = extract_number(user_input)
     elif last_q == "budget": data["budget_per_person"] = extract_number(user_input)
 
-    # Always parse for any additional travel details
     if not parsed_data: parsed_data = call_api(API_URLS["parse"], {"query": user_input})
     if parsed_data and parsed_data.get("success"):
         data.update({k: v for k, v in parsed_data.items() if v is not None})
@@ -115,8 +106,12 @@ def get_next_response() -> str:
 
 def handle_planning_request(user_input: str):
     data = st.session_state.travel_data
-    if any(cmd in user_input.lower() for cmd in ["flight", "hotel", "itinerary", "complete"]) and not data.get("outbound_date"):
+    if not data.get("outbound_date"):
         st.session_state.messages.append({"role": "assistant", "content": "I need your travel dates first. When would you like to go?"}); return
+
+    with st.spinner("Thinking..."):
+        command_response = call_api(API_URLS["parse_command"], {"query": user_input})
+    command = command_response.get("command") if command_response else "general_question"
 
     def get_api_results(task_name: str, url: str, payload: dict) -> Optional[dict]:
         with st.spinner(f"AI is working on your {task_name}..."):
@@ -126,27 +121,27 @@ def handle_planning_request(user_input: str):
                  st.error(f"Sorry, I couldn't find any {task_name}. Please try different criteria."); return None
             return results
 
-    commands = {
-        "flight": ("flights", API_URLS["flights"], {"origin": data.get("origin"), "destination": data.get("destination"), "outbound_date": format_date(data.get("outbound_date")), "return_date": format_date(data.get("return_date"))}),
-        "hotel": ("hotels", API_URLS["hotels"], {"location": data.get("destination"), "check_in_date": format_date(data.get("outbound_date")), "check_out_date": format_date(data.get("return_date"))}),
-        "itinerary": ("itinerary", API_URLS["itinerary"], {"destination": data.get("destination"), "check_in_date": format_date(data.get("outbound_date")), "check_out_date": format_date(data.get("return_date")), "flights": str(st.session_state.search_results.get("flights", "")), "hotels": str(st.session_state.search_results.get("hotels", ""))}),
-        "complete": ("complete plan", API_URLS["complete"], {"flight_request": {"origin": data.get("origin"), "destination": data.get("destination"), "outbound_date": format_date(data.get("outbound_date")), "return_date": format_date(data.get("return_date"))}})
-    }
-    for keyword, (task_name, url, payload) in commands.items():
-        if keyword in user_input.lower():
-            if results := get_api_results(task_name, url, payload):
-                st.session_state.search_results.update(results)
-                st.session_state.messages.append({"role": "assistant", "content": f"Here are the {task_name} I found for your trip:", "results": results})
-            return
-
-    if results := get_api_results("answer", API_URLS["general"], {"destination": data.get("destination", "general"), "query": user_input}):
-        if results.get("general_answer"): st.session_state.messages.append({"role": "assistant", "content": results["general_answer"]})
+    if command == "flights":
+        payload = {"origin": data.get("origin"), "destination": data.get("destination"), "outbound_date": format_date(data.get("outbound_date")), "return_date": format_date(data.get("return_date"))}
+        if results := get_api_results("flights", API_URLS["flights"], payload):
+            st.session_state.search_results.update(results); st.session_state.messages.append({"role": "assistant", "content": "Here are the flights I found:", "results": results})
+    elif command == "hotels":
+        payload = {"location": data.get("destination"), "check_in_date": format_date(data.get("outbound_date")), "check_out_date": format_date(data.get("return_date"))}
+        if results := get_api_results("hotels", API_URLS["hotels"], payload):
+            st.session_state.search_results.update(results); st.session_state.messages.append({"role": "assistant", "content": "Here are some hotels I found:", "results": results})
+    elif command == "itinerary":
+        payload = {"destination": data.get("destination"), "check_in_date": format_date(data.get("outbound_date")), "check_out_date": format_date(data.get("return_date")), "flights": str(st.session_state.search_results.get("flights", "Not available")), "hotels": str(st.session_state.search_results.get("hotels", "Not available"))}
+        if results := get_api_results("itinerary", API_URLS["itinerary"], payload):
+            st.session_state.search_results.update(results); st.session_state.messages.append({"role": "assistant", "content": "Here is a potential itinerary for your trip:", "results": results})
+    else: # general_question
+        if results := get_api_results("answer", API_URLS["general"], {"destination": data.get("destination", "general"), "query": user_input}):
+            if results.get("general_answer"): st.session_state.messages.append({"role": "assistant", "content": results["general_answer"]})
 
 # --- Main App ---
 init_session_state()
 
 with st.sidebar:
-    st.title("AI Travel Planner")
+    st.title("AI Travel Planner");
     if st.button("Start New Plan", use_container_width=True): st.session_state.clear(); st.rerun()
     st.markdown("---"); data = st.session_state.travel_data
     st.markdown(f"**To:** {data.get('destination', '...')}"); st.markdown(f"**From:** {data.get('origin', '...')}")
@@ -167,21 +162,15 @@ for message in st.session_state.messages:
 if user_input := st.chat_input("Your message..."):
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # --- THIS IS THE NEW, CONTEXT-AWARE LOGIC ---
     if st.session_state.stage == "gathering_info":
         last_q = st.session_state.last_question
-        
-        # If the bot just asked a question that expects a number, handle it directly.
         if last_q in ["num_people", "budget"]:
             process_user_input(user_input)
             st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
         else:
-            # Otherwise, use AI to determine intent (travel info vs. general question)
             with st.spinner("Thinking..."):
                 parsed_data = call_api(API_URLS["parse"], {"query": user_input})
-            
             is_travel_query = parsed_data and parsed_data.get("success") and any(parsed_data.get(k) for k in ["origin", "destination", "outbound_date", "days"])
-
             if is_travel_query:
                 process_user_input(user_input, parsed_data)
                 st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
@@ -189,7 +178,7 @@ if user_input := st.chat_input("Your message..."):
                 with st.spinner("..."):
                     if results := call_api(API_URLS["general"], {"destination": "general", "query": user_input}):
                         st.session_state.messages.append({"role": "assistant", "content": results.get("general_answer")})
-    else: # Stage is 'info_gathered' or 'results_displayed'
+    else:
         handle_planning_request(user_input)
         
     st.rerun()
