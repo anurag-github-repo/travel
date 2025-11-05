@@ -21,14 +21,14 @@ st.set_page_config(page_title="AI Travel Planner", page_icon="✈️", layout="w
 def init_session_state():
     for key, value in {
         "messages": [], "travel_data": {}, "stage": "gathering_info",
-        "last_question": None, "search_results": {} # search_results is still useful for context
+        "last_question": None, "search_results": {}
     }.items():
         if key not in st.session_state: st.session_state[key] = value
 
 # --- Helper Functions ---
 def call_api(url: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
-        response = requests.post(url, json=payload, timeout=90) # Increased timeout for long tasks
+        response = requests.post(url, json=payload, timeout=90)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -48,8 +48,8 @@ def extract_number(t: str) -> Optional[int]:
 
 # --- UI Display Components ---
 def display_results_in_chat(results: Dict[str, Any]):
-    """Renders the results directly in the chat message container."""
     if not results: return
+    # (The UI display functions are correct and remain unchanged)
     if results.get("flights"):
         st.markdown("---"); st.markdown("##### ✈️ Top Flight Options")
         cols = st.columns(min(3, len(results["flights"])))
@@ -77,12 +77,12 @@ def display_results_in_chat(results: Dict[str, Any]):
         st.markdown(results["itinerary"])
 
 # --- Core Logic ---
-def process_user_input(user_input: str):
+def process_user_input(user_input: str, parsed_data: Optional[Dict] = None):
     data = st.session_state.travel_data; last_q = st.session_state.last_question
     if last_q == "num_people": data["num_people"] = extract_number(user_input)
     elif last_q == "budget": data["budget_per_person"] = extract_number(user_input)
 
-    with st.spinner("Thinking..."): parsed_data = call_api(API_URLS["parse"], {"query": user_input})
+    if not parsed_data: parsed_data = call_api(API_URLS["parse"], {"query": user_input})
     if parsed_data and parsed_data.get("success"):
         data.update({k: v for k, v in parsed_data.items() if v is not None})
         if parsed_data.get("outbound_date"):
@@ -108,8 +108,7 @@ def get_next_response() -> str:
 def handle_planning_request(user_input: str):
     data = st.session_state.travel_data
     if any(cmd in user_input.lower() for cmd in ["flight", "hotel", "itinerary", "complete"]) and not data.get("outbound_date"):
-        st.session_state.messages.append({"role": "assistant", "content": "I need your travel dates first. When would you like to go?"})
-        st.session_state.last_question = "dates"; return
+        st.session_state.messages.append({"role": "assistant", "content": "I need your travel dates first. When would you like to go?"}); return
 
     def get_api_results(task_name: str, url: str, payload: dict) -> Optional[dict]:
         with st.spinner(f"AI is working on your {task_name}..."):
@@ -151,7 +150,6 @@ st.header("Chat with the AI Travel Planner")
 if not st.session_state.messages:
     st.session_state.messages.append({"role": "assistant", "content": "Hello! I'm your AI travel planner, ready to help you organize the perfect trip. To get started, where would you like to travel?"})
 
-# New Display Loop: Renders results as part of the message history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -161,10 +159,26 @@ for message in st.session_state.messages:
 if user_input := st.chat_input("Your message..."):
     st.session_state.messages.append({"role": "user", "content": user_input})
 
+    # --- THIS IS THE NEW, SMARTER LOGIC BLOCK ---
     if st.session_state.stage == "gathering_info":
-        process_user_input(user_input)
-        bot_response = get_next_response()
-        st.session_state.messages.append({"role": "assistant", "content": bot_response})
+        with st.spinner("Thinking..."):
+            parsed_data = call_api(API_URLS["parse"], {"query": user_input})
+        
+        # Determine user's intent
+        is_travel_query = parsed_data and parsed_data.get("success") and any(parsed_data.get(k) for k in ["origin", "destination", "outbound_date", "days"])
+
+        if is_travel_query:
+            # Intent A: User is providing travel info
+            process_user_input(user_input, parsed_data)
+            st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
+        else:
+            # Intent B: User is asking a general question
+            with st.spinner("..."):
+                if results := call_api(API_URLS["general"], {"destination": "general", "query": user_input}):
+                    st.session_state.messages.append({"role": "assistant", "content": results.get("general_answer")})
+                    # Nudge them back to planning
+                    if st.session_state.stage == "gathering_info":
+                         st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
     else: # Stage is 'info_gathered' or 'results_displayed'
         handle_planning_request(user_input)
         
