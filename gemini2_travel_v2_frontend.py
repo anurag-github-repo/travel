@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 # --- API Configuration ---
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "https://vchat.marketsverse.com"
 API_URLS = {
     "flights": f"{API_BASE_URL}/search_flights/",
     "hotels": f"{API_BASE_URL}/search_hotels/",
