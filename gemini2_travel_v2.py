@@ -201,4 +201,4 @@ async def ep_general_travel_query(req: GeneralQueryRequest):
 
 # --- Server Execution ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8186)
