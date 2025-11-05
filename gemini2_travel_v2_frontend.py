@@ -43,7 +43,12 @@ def extract_number(t: str) -> Optional[int]:
     n = re.findall(r'\d+', t.replace(',', ''))
     if n:
         num = int(n[0])
-        return num * 1000 if 'k' in t.lower() else num
+        # Handle "lakh" and "k" for budget/number entries
+        if 'lakh' in t.lower():
+            return num * 100000
+        if 'k' in t.lower():
+            return num * 1000
+        return num
     return None
 
 # --- UI Display Components ---
@@ -79,9 +84,12 @@ def display_results_in_chat(results: Dict[str, Any]):
 # --- Core Logic ---
 def process_user_input(user_input: str, parsed_data: Optional[Dict] = None):
     data = st.session_state.travel_data; last_q = st.session_state.last_question
+    
+    # Directly handle answers to specific non-parsing questions
     if last_q == "num_people": data["num_people"] = extract_number(user_input)
     elif last_q == "budget": data["budget_per_person"] = extract_number(user_input)
 
+    # Always parse for any additional travel details
     if not parsed_data: parsed_data = call_api(API_URLS["parse"], {"query": user_input})
     if parsed_data and parsed_data.get("success"):
         data.update({k: v for k, v in parsed_data.items() if v is not None})
@@ -159,22 +167,29 @@ for message in st.session_state.messages:
 if user_input := st.chat_input("Your message..."):
     st.session_state.messages.append({"role": "user", "content": user_input})
 
+    # --- THIS IS THE NEW, CONTEXT-AWARE LOGIC ---
     if st.session_state.stage == "gathering_info":
-        with st.spinner("Thinking..."):
-            parsed_data = call_api(API_URLS["parse"], {"query": user_input})
+        last_q = st.session_state.last_question
         
-        is_travel_query = parsed_data and parsed_data.get("success") and any(parsed_data.get(k) for k in ["origin", "destination", "outbound_date", "days"])
-
-        if is_travel_query:
-            process_user_input(user_input, parsed_data)
+        # If the bot just asked a question that expects a number, handle it directly.
+        if last_q in ["num_people", "budget"]:
+            process_user_input(user_input)
             st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
         else:
-            # --- THIS IS THE FIX ---
-            # The "aggressive nudge" has been removed. The bot now only answers the question and waits.
-            with st.spinner("..."):
-                if results := call_api(API_URLS["general"], {"destination": "general", "query": user_input}):
-                    st.session_state.messages.append({"role": "assistant", "content": results.get("general_answer", "I'm sorry, I'm not sure how to answer that. Let's get back to planning your trip. Where would you like to go?")})
-    else:
+            # Otherwise, use AI to determine intent (travel info vs. general question)
+            with st.spinner("Thinking..."):
+                parsed_data = call_api(API_URLS["parse"], {"query": user_input})
+            
+            is_travel_query = parsed_data and parsed_data.get("success") and any(parsed_data.get(k) for k in ["origin", "destination", "outbound_date", "days"])
+
+            if is_travel_query:
+                process_user_input(user_input, parsed_data)
+                st.session_state.messages.append({"role": "assistant", "content": get_next_response()})
+            else:
+                with st.spinner("..."):
+                    if results := call_api(API_URLS["general"], {"destination": "general", "query": user_input}):
+                        st.session_state.messages.append({"role": "assistant", "content": results.get("general_answer")})
+    else: # Stage is 'info_gathered' or 'results_displayed'
         handle_planning_request(user_input)
         
     st.rerun()
