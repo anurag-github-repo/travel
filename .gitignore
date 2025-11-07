@@ -1,1 +1,4 @@
 venv/
+myenv/
+__pycache__/
+logs/

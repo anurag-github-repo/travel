@@ -6,6 +6,7 @@ import re
 import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from serpapi import GoogleSearch
 from crewai import Agent, Task, Crew
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def initialize_llm():
     from crewai import LLM
-    return LLM(model="gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
+    return LLM(model="gemini/gemini-2.5-flash-lite", api_key=GEMINI_API_KEY)
 
 # --- Pydantic Models ---
 class FlightRequest(BaseModel): origin: str; destination: str; outbound_date: str; return_date: str
@@ -43,6 +44,13 @@ class ParsedTravelDetails(BaseModel):
     success: bool = False; error: Optional[str] = None
 
 app = FastAPI(title="Travel Planning API", version="3.0.0-Final")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust based on your frontend's URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers (you can limit this to specific headers if needed)
+)
 
 # --- IATA Code Handling ---
 CITY_TO_IATA = { "mumbai": "BOM", "vadodara": "BDQ", "dubai": "DXB", "switzerland": "ZRH", "hyderabad": "HYD", "delhi": "DEL", "goa": "GOI", "bangalore": "BLR" }

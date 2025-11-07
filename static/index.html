@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Travel Assistant</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script defer src="/static/app.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #f8f9fa; color: #1a1a1a; }
+    .container { display: flex; height: 100vh; overflow: hidden; }
+    
+    /* Left Panel */
+    .left { width: 420px; background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+    .left-header { padding: 20px; border-bottom: 1px solid #e0e0e0; }
+    .left-header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+    
+    /* Flight Search Form */
+    .search-form { padding: 20px; border-bottom: 1px solid #e0e0e0; }
+    .toggle-group { display: flex; gap: 12px; margin-bottom: 20px; }
+    .toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+    .toggle-switch { width: 44px; height: 24px; background: #e0e0e0; border-radius: 12px; position: relative; transition: all 0.3s; }
+    .toggle-switch.active { background: #10b981; }
+    .toggle-switch::after { content: ''; position: absolute; width: 18px; height: 18px; background: white; border-radius: 50%; top: 3px; left: 3px; transition: all 0.3s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .toggle-switch.active::after { left: 23px; }
+    .info-icon { width: 16px; height: 16px; border-radius: 50%; background: #e0e0e0; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; cursor: help; }
+    
+    .route-inputs { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .input-field { flex: 1; position: relative; }
+    .input-field input { width: 100%; padding: 14px 16px 14px 44px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; transition: all 0.3s; }
+    .input-field input:focus { outline: none; border-color: #10b981; }
+    .input-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; }
+    .swap-btn { width: 40px; height: 40px; border: 2px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s; }
+    .swap-btn:hover { border-color: #10b981; transform: rotate(180deg); }
+    
+    .date-passenger-row { display: flex; gap: 12px; margin-bottom: 16px; }
+    .date-input { flex: 1; position: relative; }
+    .date-input input { width: 100%; padding: 14px 16px 14px 40px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; }
+    .date-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
+    .passenger-input { width: 140px; position: relative; }
+    .passenger-input input { width: 100%; padding: 14px 16px 14px 40px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; }
+    
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .filter-tag { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; background: #f0f9ff; border: 1px solid #10b981; border-radius: 20px; font-size: 13px; color: #10b981; }
+    .filter-tag .close { cursor: pointer; font-weight: bold; }
+    
+    .search-btn { width: 100%; padding: 14px; background: #10b981; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .search-btn:hover { background: #059669; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
+    
+    /* Chat Section */
+    .chat-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .chat-header { padding: 20px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 8px; }
+    .chat-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .chat-content { flex: 1; padding: 20px; overflow-y: auto; }
+    .suggestions { margin-bottom: 20px; }
+    .suggestions p { margin: 0 0 12px 0; font-size: 14px; color: #666; }
+    .suggestion-btn { display: block; width: 100%; text-align: left; padding: 12px 16px; margin-bottom: 8px; background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: all 0.3s; font-size: 14px; }
+    .suggestion-btn:hover { background: #e9ecef; border-color: #10b981; transform: translateX(4px); }
+    .suggestion-btn::before { content: '⭐ '; }
+    
+    .chat-messages { min-height: 100px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { padding: 14px 16px; border-radius: 12px; max-width: 85%; animation: slideIn 0.3s ease-out; word-wrap: break-word; line-height: 1.5; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .msg.user { background: #10b981; color: white; margin-left: auto; align-self: flex-end; }
+    .msg.bot { background: #f0f9ff; color: #1a1a1a; align-self: flex-start; white-space: pre-wrap; }
+    
+    .chat-input-wrapper { padding: 20px; border-top: 1px solid #e0e0e0; }
+    .chat-input { display: flex; gap: 12px; }
+    .chat-input input { flex: 1; padding: 12px 16px; border: 2px solid #e0e0e0; border-radius: 24px; font-size: 14px; transition: all 0.3s; }
+    .chat-input input:focus { outline: none; border-color: #10b981; }
+    .chat-input button { width: 40px; height: 40px; border: none; background: #10b981; color: white; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s; }
+    .chat-input button:hover { background: #059669; transform: scale(1.1); }
+    
+    /* Right Panel */
+    .right { flex: 1; display: flex; flex-direction: column; background: #f8f9fa; overflow: hidden; }
+    .right-header { padding: 20px; border-bottom: 1px solid #e0e0e0; background: white; display: flex; justify-content: space-between; align-items: center; }
+    .right-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
+    .nav-links { display: flex; gap: 20px; }
+    .nav-links a { color: #666; text-decoration: none; font-size: 14px; transition: color 0.3s; }
+    .nav-links a:hover { color: #10b981; }
+    
+    .map-container { flex: 1; position: relative; margin: 20px; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); animation: fadeIn 0.5s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    #map { width: 100%; height: 100%; }
+    
+    .results-section { padding: 20px; overflow-y: auto; }
+    .results-header { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    .flight-list { display: flex; flex-direction: column; gap: 0; }
+    .flight-card { background: white; border: 1px solid #e0e0e0; border-top: none; padding: 20px; display: flex; align-items: center; gap: 20px; transition: all 0.2s; animation: slideUp 0.4s ease-out; }
+    .flight-card:first-child { border-top: 1px solid #e0e0e0; border-radius: 12px 12px 0 0; }
+    .flight-card:last-child { border-radius: 0 0 12px 12px; }
+    .flight-card:hover { background: #f8f9fa; }
+    .flight-logo { width: 48px; height: 48px; border-radius: 50%; background: #e0e0e0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .flight-logo img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+    .flight-info { flex: 1; display: flex; align-items: center; gap: 40px; }
+    .flight-times { display: flex; align-items: center; gap: 20px; flex: 1; }
+    .flight-time { display: flex; flex-direction: column; gap: 4px; }
+    .flight-time-code { font-size: 18px; font-weight: 600; }
+    .flight-time-hour { font-size: 14px; color: #666; }
+    .flight-route { position: relative; flex: 1; display: flex; align-items: center; }
+    .flight-route-line { height: 2px; background: #e0e0e0; flex: 1; }
+    .flight-route-label { position: absolute; left: 50%; transform: translateX(-50%); background: white; padding: 0 8px; font-size: 12px; color: #666; }
+    .flight-duration { display: flex; flex-direction: column; gap: 4px; min-width: 80px; }
+    .flight-duration-time { font-size: 14px; font-weight: 500; }
+    .flight-duration-date { font-size: 12px; color: #666; }
+    .flight-price { text-align: right; min-width: 100px; }
+    .flight-price-amount { font-size: 24px; font-weight: 600; }
+    .flight-price-airline { font-size: 14px; color: #666; margin-top: 4px; }
+    .flight-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .flight-action-link { color: #10b981; text-decoration: none; font-size: 13px; }
+    
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+    .card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; transition: all 0.3s; animation: slideUp 0.4s ease-out; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    .card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+    .card img { width: 100%; height: 200px; object-fit: cover; }
+    .card-content { padding: 20px; }
+    .card-title { font-weight: 600; font-size: 18px; margin-bottom: 12px; }
+    .card-detail { font-size: 14px; color: #666; margin: 8px 0; }
+    .card-rating { display: inline-flex; align-items: center; gap: 4px; background: #f0f9ff; color: #10b981; padding: 4px 8px; border-radius: 4px; font-size: 13px; font-weight: 500; }
+    .card-link { display: inline-block; margin-top: 16px; color: #10b981; text-decoration: none; font-size: 14px; font-weight: 500; }
+    .card-link:hover { text-decoration: underline; }
+    
+    .travel-plan-card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; padding: 24px; white-space: pre-wrap; line-height: 1.8; color: #333; font-size: 15px; animation: slideUp 0.4s ease-out; }
+    .travel-plan-card h3 { color: #10b981; margin-top: 24px; margin-bottom: 12px; font-size: 18px; }
+    .travel-plan-card h3:first-child { margin-top: 0; }
+    
+    .toggle-view-btn:hover { background: #f8f9fa; border-color: #10b981; }
+    
+    .tab-btn.active { color: #10b981 !important; border-bottom-color: #10b981 !important; font-weight: 600 !important; }
+    .tab-btn:hover { color: #10b981; background: rgba(16, 185, 129, 0.05); border-radius: 8px 8px 0 0; }
+    .tab-content { animation: fadeIn 0.3s ease-out; }
+    
+    .loading { display: inline-block; width: 16px; height: 16px; border: 2px solid #e0e0e0; border-top-color: #10b981; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    /* Enhanced UI improvements */
+    .right-header { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .left-header { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .chat-header { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    
+    .msg.bot { box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    .msg.user { box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2); }
+    
+    .flight-card { box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: all 0.3s; }
+    .flight-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-2px); }
+    
+    .card { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .card:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+    
+    .travel-plan-card { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    
+    .search-results-list { display: flex; flex-direction: column; gap: 16px; }
+    .search-result-card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; transition: all 0.3s; animation: slideUp 0.4s ease-out; }
+    .search-result-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-2px); }
+    .search-result-title { font-size: 18px; font-weight: 600; color: #10b981; margin-bottom: 8px; }
+    .search-result-title a { color: #10b981; text-decoration: none; }
+    .search-result-title a:hover { text-decoration: underline; }
+    .search-result-snippet { color: #666; line-height: 1.6; margin-bottom: 8px; }
+    .search-result-link { color: #999; font-size: 13px; text-decoration: none; }
+    .search-result-link:hover { color: #10b981; }
+    
+    .tabs { background: white; padding: 0 20px; border-radius: 12px 12px 0 0; }
+    
+    /* Smooth transitions */
+    * { transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
+    
+    /* Better scrollbar */
+    .chat-content::-webkit-scrollbar, .results-section::-webkit-scrollbar { width: 8px; }
+    .chat-content::-webkit-scrollbar-track, .results-section::-webkit-scrollbar-track { background: #f1f1f1; }
+    .chat-content::-webkit-scrollbar-thumb, .results-section::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+    .chat-content::-webkit-scrollbar-thumb:hover, .results-section::-webkit-scrollbar-thumb:hover { background: #a1a1a1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Left Panel -->
+    <section class="left">
+      <div class="left-header">
+        <h1>Travel Assistant</h1>
+      </div>
+      
+      <!-- Chat Section -->
+      <div class="chat-section">
+        <div class="chat-header">
+          <svg width="20" height="20" fill="#10b981" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <h2>Chat to search</h2>
+        </div>
+        <div class="chat-content">
+          <div class="suggestions">
+            <p>Looking for flights? We've got a few ideas.</p>
+            <button class="suggestion-btn" data-suggestion="Direct flights from Mumbai to Hyderabad">Direct flights from Mumbai to Hyderabad</button>
+            <button class="suggestion-btn" data-suggestion="Mumbai to Singapore for me and three friends on Jan 26th">Mumbai to Singapore for me and three friends on Jan 26th</button>
+            <button class="suggestion-btn" data-suggestion="Round trip to Delhi for 2 adults">Round trip to Delhi for 2 adults</button>
+          </div>
+          <div class="chat-messages" id="chatMessages"></div>
+        </div>
+        <div class="chat-input-wrapper">
+          <div class="chat-input">
+            <input type="text" id="chatInput" placeholder="Your trip details" />
+            <button id="chatSendBtn">
+              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Right Panel -->
+    <section class="right">
+      <div class="right-header">
+        <h2 id="tripTitle">Your trip</h2>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <button id="toggleView" class="toggle-view-btn" style="padding: 8px 16px; border: 1px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; font-size: 14px; display: none; align-items: center; gap: 8px;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+            <span id="toggleViewText">Show map</span>
+          </button>
+          <div class="nav-links">
+            <a href="#" id="newSearch">+ New search</a>
+            <a href="#">Sign in</a>
+          </div>
+        </div>
+      </div>
+      <div class="map-container" id="mapContainer" style="display: none;">
+        <div id="map"></div>
+      </div>
+      <div class="results-section" id="resultsSection">
+        <div class="tabs" style="display: flex; gap: 8px; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px;">
+          <button class="tab-btn active" data-tab="flights" style="padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 15px; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.3s;">
+            ✈️ Flights
+          </button>
+          <button class="tab-btn" data-tab="hotels" style="padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 15px; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.3s;">
+            🏨 Hotels
+          </button>
+          <button class="tab-btn" data-tab="plan" style="padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 15px; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.3s;">
+            📋 Travel Plan
+          </button>
+          <button class="tab-btn" data-tab="search" style="padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 15px; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.3s;">
+            🔍 Search Results
+          </button>
+        </div>
+        <div id="tab-flights" class="tab-content">
+          <div id="flights" class="flight-list"></div>
+        </div>
+        <div id="tab-hotels" class="tab-content" style="display: none;">
+          <div id="hotels" class="cards"></div>
+        </div>
+        <div id="tab-plan" class="tab-content" style="display: none;">
+          <div id="itinerary" class="travel-plan-card"></div>
+        </div>
+        <div id="tab-search" class="tab-content" style="display: none;">
+          <div id="searchResults" class="search-results-list"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
