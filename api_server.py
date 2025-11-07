@@ -71,18 +71,21 @@ To help me find the best options for you, could you please share your estimated 
 CRITICAL RULES:
 1. ALWAYS confirm what the user told you before asking the next question
 2. Be SMART and EFFICIENT - don't ask for information you already have from the conversation context
-3. When user provides dates, automatically infer if it's round trip (if return date is mentioned) or one-way
-4. For round-trip flights, you NEED both outbound_date and return_date. For one-way, only outbound_date is needed.
-5. Remember all information from conversation (origin, destination, dates, passengers, budget, round_trip status)
-6. When user says "show me hotels/travel plan" or explicitly asks for something, use stored context automatically and execute immediately
-7. DO NOT automatically search for hotels or travel plans unless the user explicitly asks for them
-8. Present results in a friendly, organized way with emojis and clear formatting
-9. When users mention relative dates (tomorrow, next week, next month), convert them to actual dates using today's date ({today_iso})
-10. IMPORTANT: When you receive flight search results from the find_flights function, DO NOT repeat the flight list in your response. The flights will be displayed in a table format automatically. Instead, just acknowledge the search and provide a brief friendly summary like "Here are the flight options I found for you!" or "Great! I found several flight options." Do NOT list individual flights in numbered format or table format in your text response.
-11. When user provides a year confirmation like "yes its 2026", use that year immediately without asking again
-12. Be proactive but not pushy - only search for what the user explicitly requests
+3. EXTRACT all details from the conversation naturally - dates, years, destinations, hotels, etc. Don't rely on hardcoded values
+4. When user provides dates, automatically infer if it's round trip (if return date is mentioned) or one-way
+5. For round-trip flights, you NEED both outbound_date and return_date. For one-way, only outbound_date is needed.
+6. Remember all information from conversation (origin, destination, dates, passengers, budget, round_trip status)
+7. When user says "show me hotels/travel plan" or explicitly asks for something, EXTRACT the necessary details (destination, dates, etc.) from the conversation context and execute immediately
+8. DO NOT automatically search for hotels or travel plans unless the user explicitly asks for them
+9. Present results in a friendly, organized way with emojis and clear formatting
+10. When users mention relative dates (tomorrow, next week, next month), convert them to actual dates using today's date ({today_iso})
+11. IMPORTANT: When you receive flight search results from the find_flights function, DO NOT repeat the flight list in your response. The flights will be displayed in a table format automatically. Instead, just acknowledge the search and provide a brief friendly summary like "Here are the flight options I found for you!" or "Great! I found several flight options." Do NOT list individual flights in numbered format or table format in your text response.
+12. When user provides a year confirmation like "yes its 2026", EXTRACT that year from their message and use it immediately without asking again
+13. For hotel searches, EXTRACT destination, check-in date, and check-out date from the conversation context - don't ask for them if they're already mentioned
+14. For travel plans, EXTRACT destination and calculate days from dates mentioned in conversation - don't use hardcoded defaults
+15. Be proactive but not pushy - only search for what the user explicitly requests
 
-Always be conversational, helpful, confirm details, and remember context!"""
+Always be conversational, helpful, confirm details, extract information naturally, and remember context!"""
 
 _model = genai.GenerativeModel(
     model_name='gemini-2.5-flash-lite',
@@ -172,126 +175,34 @@ async def chat(req: ChatRequest):
     enhanced_message = req.message
     msg_lower = req.message.lower()
     
-    # Intelligently enhance message with context - be more aggressive
-    # If user asks for hotels, directly provide full context and execute immediately
-    if any(word in msg_lower for word in ["hotel", "accommodation", "stay", "lodging", "show me hotels", "find hotels"]):
-        if context.get("destination") and context.get("depart_date"):
-            if context.get("return_date"):
-                enhanced_message = f"Find hotels in {context['destination']} from {context['depart_date']} to {context['return_date']}. Execute immediately without asking questions."
-            else:
-                enhanced_message = f"Find hotels in {context['destination']} from {context['depart_date']}. Execute immediately without asking questions."
+    # Let AI extract details naturally - don't hardcode enhancements
+    # Just provide context hints if needed, but let AI do the extraction
     
-    # If user asks for travel plan, directly provide full context and execute immediately
-    if any(word in msg_lower for word in ["travel plan", "plan", "places to visit", "things to do", "activities", "show me travel plan", "itinerary"]):
-        if context.get("destination"):
-            days = 3
-            if context.get("depart_date") and context.get("return_date"):
-                try:
-                    from datetime import datetime
-                    dep = datetime.strptime(context['depart_date'], '%Y-%m-%d')
-                    ret = datetime.strptime(context['return_date'], '%Y-%m-%d')
-                    days = (ret - dep).days
-                    if days < 1:
-                        days = 3
-                except:
-                    pass
-            enhanced_message = f"Create a {days}-day travel plan for {context['destination']} with places to visit and activities. Execute immediately without asking for additional information."
-    
-    # Handle round trip updates - check if user is changing round trip status
+    # Handle round trip updates - just update context flags, let AI extract details
     if any(word in msg_lower for word in ["round trip", "roundtrip", "return", "one way", "one-way", "single"]):
         if "round trip" in msg_lower or "roundtrip" in msg_lower or ("return" in msg_lower and "date" in msg_lower):
             context["round_trip"] = True
-            if context.get("depart_date") and not context.get("return_date"):
-                enhanced_message = f"User wants a round trip. Find flights from {context.get('origin', '')} to {context.get('destination', '')} on {context.get('depart_date', '')}. Ask for return date if not provided."
         elif "one way" in msg_lower or "one-way" in msg_lower or "single" in msg_lower:
             context["round_trip"] = False
             context["return_date"] = ""  # Clear return date for one-way
     
-    # For flights - don't auto-assume dates, let the model ask if needed
-    # Only enhance if we have BOTH dates for round trip, or just depart for one-way
-    if any(word in msg_lower for word in ["flight", "flights", "show me flights", "update flights", "refresh flights"]) and ("show" in msg_lower or "find" in msg_lower or "also" in msg_lower or "direct" in msg_lower or "update" in msg_lower or "refresh" in msg_lower):
-        if context.get("origin") and context.get("destination") and context.get("depart_date"):
-            if context.get("round_trip") and context.get("return_date"):
-                if "direct" in msg_lower or "nonstop" in msg_lower:
-                    enhanced_message = f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}. Prefer nonstop flights."
-                else:
-                    enhanced_message = f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}"
-            elif not context.get("round_trip"):
-                if "direct" in msg_lower or "nonstop" in msg_lower:
-                    enhanced_message = f"Find one-way flights from {context['origin']} to {context['destination']} on {context['depart_date']}. Prefer nonstop flights."
-                else:
-                    enhanced_message = f"Find one-way flights from {context['origin']} to {context['destination']} on {context['depart_date']}"
+    # Let AI extract flight details naturally from conversation - no hardcoded enhancements
     
-    # Handle "also" requests - if user says "show me X and Y also", create combined request
-    if "also" in msg_lower or "and" in msg_lower:
-        needs_hotels = any(word in msg_lower for word in ["hotel", "accommodation", "stay"])
-        needs_plan = any(word in msg_lower for word in ["travel plan", "plan", "places", "activities"])
-        needs_flights = any(word in msg_lower for word in ["flight", "flights"])
-        
-        # Build combined request
-        requests = []
-        if needs_flights and context.get("origin") and context.get("destination") and context.get("depart_date"):
-            if context.get("return_date"):
-                requests.append(f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}")
-            else:
-                requests.append(f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']}")
-        
-        if needs_hotels and context.get("destination") and context.get("depart_date"):
-            if context.get("return_date"):
-                requests.append(f"Find hotels in {context['destination']} from {context['depart_date']} to {context['return_date']}")
-            else:
-                requests.append(f"Find hotels in {context['destination']} from {context['depart_date']}")
-        
-        if needs_plan and context.get("destination"):
-            days = 3
-            if context.get("depart_date") and context.get("return_date"):
-                try:
-                    from datetime import datetime
-                    dep = datetime.strptime(context['depart_date'], '%Y-%m-%d')
-                    ret = datetime.strptime(context['return_date'], '%Y-%m-%d')
-                    days = (ret - dep).days
-                    if days < 1:
-                        days = 3
-                except:
-                    pass
-            requests.append(f"Create a {days}-day travel plan for {context['destination']} with places to visit and activities. Do not ask for additional information.")
-        
-        if requests:
-            enhanced_message = ". ".join(requests) + ". Execute all these requests immediately without asking questions."
+    # Let AI handle "also" requests naturally - it will extract details from conversation
+    # No hardcoded logic needed - AI will understand context and extract what's needed
     
     # Log the enhancement for debugging
     if enhanced_message != req.message:
         app_logger.info(f"Enhanced message: '{req.message}' -> '{enhanced_message}' (context: {context})")
 
-    # Add current date context to the message if it contains relative dates or year confirmations
+    # Add current date context to the message if it contains relative dates
+    # Let AI extract year and other details naturally from the conversation
     from datetime import datetime
     today = datetime.now()
     today_iso = today.strftime("%Y-%m-%d")
     today_str = today.strftime("%B %d, %Y")
     
-    # Extract year from user message if mentioned (e.g., "yes its 2026", "2026", "year 2026")
-    year_match = re.search(r'\b(20\d{2})\b', req.message)
-    if year_match:
-        year = year_match.group(1)
-        enhanced_message = f"[User confirmed year: {year}] {enhanced_message}"
-        # Update context with year if we have dates
-        if context.get("depart_date") and not context["depart_date"].startswith(year):
-            # Update date with correct year
-            try:
-                old_date = datetime.strptime(context["depart_date"], "%Y-%m-%d")
-                new_date = old_date.replace(year=int(year))
-                context["depart_date"] = new_date.strftime("%Y-%m-%d")
-            except:
-                pass
-        if context.get("return_date") and not context["return_date"].startswith(year):
-            try:
-                old_date = datetime.strptime(context["return_date"], "%Y-%m-%d")
-                new_date = old_date.replace(year=int(year))
-                context["return_date"] = new_date.strftime("%Y-%m-%d")
-            except:
-                pass
-    
-    # Check if message contains relative date keywords
+    # Only add date context for relative dates - let AI extract specific years and dates
     relative_date_keywords = ['tomorrow', 'next week', 'next month', 'next year', 'today', 'yesterday']
     if any(keyword in enhanced_message.lower() for keyword in relative_date_keywords):
         enhanced_message = f"[Current date: {today_str} ({today_iso})] {enhanced_message}"
