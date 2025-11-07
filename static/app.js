@@ -5,6 +5,7 @@
   const chatSendBtn = document.getElementById('chatSendBtn');
   const flightsEl = document.getElementById('flights');
   const hotelsEl = document.getElementById('hotels');
+  const searchResultsEl = document.getElementById('searchResults');
   // Removed form elements - no longer needed
   const suggestionBtns = document.querySelectorAll('.suggestion-btn');
   
@@ -559,48 +560,82 @@
       
       // Also extract search results from bot's text response if we have search request but no structured results
       if (hasSearchRequest && searchResults.length === 0 && j.text) {
-        const text = j.text;
-        const lines = text.split('\n').filter(l => l.trim());
-        lines.forEach(line => {
-          // Look for bullet points with bold text (e.g., "**Burma Burma:** Known for...")
-          const boldMatch = line.match(/^[\*\-\•]\s+\*\*(.+?)\*\*[:\-]?\s*(.*)/);
-          if (boldMatch) {
-            searchResults.push({
-              title: boldMatch[1].trim(),
-              snippet: boldMatch[2].trim(),
-              link: ''
-            });
-          }
-          // Also check numbered lists with bold
-          const numberedMatch = line.match(/^\d+\.\s+\*\*(.+?)\*\*[:\-]?\s*(.*)/);
-          if (numberedMatch) {
-            searchResults.push({
-              title: numberedMatch[1].trim(),
-              snippet: numberedMatch[2].trim(),
-              link: ''
-            });
-          }
-        });
+        try {
+          const text = j.text;
+          const lines = text.split('\n').filter(l => l.trim());
+          lines.forEach(line => {
+            // Look for bullet points with bold text (e.g., "**Burma Burma:** Known for...")
+            // Pattern: *   **Name:** Description
+            const boldMatch = line.match(/^[\*\-\•]\s+\*\*(.+?)\*\*[:\-]?\s*(.*)/);
+            if (boldMatch) {
+              searchResults.push({
+                title: boldMatch[1].trim(),
+                snippet: boldMatch[2].trim(),
+                link: ''
+              });
+            }
+            // Also check numbered lists with bold
+            const numberedMatch = line.match(/^\d+\.\s+\*\*(.+?)\*\*[:\-]?\s*(.*)/);
+            if (numberedMatch) {
+              searchResults.push({
+                title: numberedMatch[1].trim(),
+                snippet: numberedMatch[2].trim(),
+                link: ''
+              });
+            }
+            // Pattern without bold: *   Name: Description (handles multiple spaces)
+            const simpleMatch = line.match(/^[\*\-\•]\s+([A-Z][^:]+?):\s*(.*)/);
+            if (simpleMatch && !boldMatch && !numberedMatch) {
+              const title = simpleMatch[1].trim();
+              const snippet = simpleMatch[2].trim();
+              // Only add if it looks like a restaurant name (starts with capital, has description)
+              if (title.length > 2 && snippet.length > 5) {
+                searchResults.push({
+                  title: title,
+                  snippet: snippet,
+                  link: ''
+                });
+              }
+            }
+          });
+        } catch (e) {
+          console.error('Error extracting search results from text:', e);
+        }
       }
       
       // Render search results
-      if (hasSearchRequest && searchResults.length > 0 && searchResultsEl) {
-        searchResultsEl.innerHTML = '';
-        searchResults.forEach((result, i) => {
-          const card = document.createElement('div');
-          card.className = 'search-result-card';
-          card.style.animationDelay = `${i * 0.1}s`;
-          const link = result.link || result.displayed_link || '';
-          const displayLink = link.replace(/^https?:\/\//, '').replace(/^www\./, '');
-          card.innerHTML = `
-            <div class="search-result-title">
-              ${link ? `<a href="${link.startsWith('http') ? link : 'https://' + link}" target="_blank">${result.title || 'N/A'}</a>` : (result.title || 'N/A')}
-            </div>
-            ${result.snippet ? `<div class="search-result-snippet">${formatMessage(result.snippet)}</div>` : ''}
-            ${displayLink ? `<a href="${link.startsWith('http') ? link : 'https://' + link}" target="_blank" class="search-result-link">${displayLink}</a>` : ''}
-          `;
-          searchResultsEl.appendChild(card);
-        });
+      if (hasSearchRequest && searchResults.length > 0) {
+        try {
+          if (!searchResultsEl) {
+            console.error('searchResultsEl not found');
+            return;
+          }
+          searchResultsEl.innerHTML = '';
+          searchResults.forEach((result, i) => {
+            try {
+              const card = document.createElement('div');
+              card.className = 'search-result-card';
+              card.style.animationDelay = `${i * 0.1}s`;
+              const link = result.link || result.displayed_link || '';
+              const displayLink = link ? link.replace(/^https?:\/\//, '').replace(/^www\./, '') : '';
+              const title = result.title || 'N/A';
+              const snippet = result.snippet || '';
+              
+              card.innerHTML = `
+                <div class="search-result-title">
+                  ${link ? `<a href="${link.startsWith('http') ? link : 'https://' + link}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}
+                </div>
+                ${snippet ? `<div class="search-result-snippet">${formatMessage(snippet)}</div>` : ''}
+                ${displayLink ? `<a href="${link.startsWith('http') ? link : 'https://' + link}" target="_blank" rel="noopener noreferrer" class="search-result-link">${displayLink}</a>` : ''}
+              `;
+              searchResultsEl.appendChild(card);
+            } catch (e) {
+              console.error('Error rendering search result card:', e, result);
+            }
+          });
+        } catch (e) {
+          console.error('Error rendering search results:', e);
+        }
       }
       
       // Switch to the appropriate tab
@@ -640,6 +675,7 @@
       }
     } catch (e) {
       hideLoading();
+      console.error('Error in sendChatMessage:', e);
       addMsg('Sorry, I encountered an error. Please try again.', 'bot');
     }
   }
@@ -664,7 +700,6 @@
   const mapContainer = document.getElementById('mapContainer');
   const resultsSection = document.getElementById('resultsSection');
   let showingMap = false;
-  
   toggleViewBtn.addEventListener('click', () => {
     showingMap = !showingMap;
     if (showingMap) {
