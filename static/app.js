@@ -22,16 +22,15 @@
     extractedInfo: {}
   };
   
-  // Map - Google Maps
+  // Map - Leaflet
   let map;
   let markers = [];
-  let routePolyline;
+  let routeLine;
   let planeMarker;
   let planeTimer;
-  let planePosition = 0; // Animation position (0 to 1)
   const sessionId = (() => Math.random().toString(36).slice(2))();
   
-  // Initialize Google Maps
+  // Initialize Leaflet Map
   function initMap() {
     if (!map && document.getElementById('map')) {
       const mapEl = document.getElementById('map');
@@ -39,26 +38,57 @@
       // Clear any existing content
       mapEl.innerHTML = '';
       
-      // Check if Google Maps is available
-      if (typeof google !== 'undefined' && google.maps) {
+      // Check if Leaflet is available
+      if (typeof L !== 'undefined') {
         try {
-          map = new google.maps.Map(mapEl, {
-            center: { lat: 20.0, lng: 78.0 },
-            zoom: 4,
-            mapTypeId: 'roadmap',
-            zoomControl: true,
-            mapTypeControl: false,
-            streetViewControl: false,
-            fullscreenControl: true
+          map = L.map('map', {
+            preferCanvas: true,
+            zoomControl: true
           });
           
-          console.log('Google Maps initialized successfully');
+          // Use OpenStreetMap tiles
+          const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 19,
+            subdomains: 'abc'
+          });
+          
+          osmLayer.addTo(map);
+          // Set initial view with reasonable zoom level
+          map.setView([20.0, 78.0], 4);
+          map.setMinZoom(2);
+          map.setMaxZoom(18);
+          
+          // Important: Invalidate size after initialization to fix rendering issues
+          map.whenReady(() => {
+            setTimeout(() => {
+              map.invalidateSize();
+              console.log('Leaflet map initialized successfully');
+            }, 100);
+          });
+          
+          // Handle tile errors gracefully - try alternative provider
+          osmLayer.on('tileerror', function() {
+            console.warn('Tile loading error, trying alternative provider');
+            try {
+              const altLayer = L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                maxZoom: 19,
+                subdomains: 'abc'
+              });
+              map.removeLayer(osmLayer);
+              altLayer.addTo(map);
+            } catch (e) {
+              console.error('Alternative tile provider also failed:', e);
+            }
+          });
+          
         } catch (e) {
-          console.error('Error initializing Google Maps:', e);
+          console.error('Error initializing Leaflet map:', e);
           mapEl.innerHTML = '<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;padding:20px;text-align:center;"><div style="font-size:48px;margin-bottom:10px;">🗺️</div><p style="margin-bottom:5px;font-size:16px;font-weight:600;">Map Loading...</p></div>';
         }
       } else {
-        // Google Maps not available - show placeholder
+        // Leaflet not available - show placeholder
         mapEl.innerHTML = '<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;padding:20px;text-align:center;"><div style="font-size:48px;margin-bottom:10px;">🗺️</div><p style="margin-bottom:5px;font-size:16px;font-weight:600;">Interactive Map</p><p style="font-size:12px;opacity:0.9;">Map will appear when route is available</p></div>';
       }
     }
@@ -442,24 +472,33 @@
     return div;
   }
   
-  // Map functions - Google Maps
+  // Map functions - Leaflet
   function ensureMap() {
-    if (!map) initMap();
+    if (!map) {
+      initMap();
+    } else {
+      // Important: Invalidate size when map container becomes visible
+      setTimeout(() => {
+        if (map) {
+          map.invalidateSize();
+        }
+      }, 100);
+    }
   }
   
   function clearMap() {
     if (!map) return;
     // Clear markers
-    markers.forEach(m => m.setMap(null));
+    markers.forEach(m => m.remove());
     markers = [];
     // Clear polyline
-    if (routePolyline) {
-      routePolyline.setMap(null);
-      routePolyline = null;
+    if (routeLine) {
+      routeLine.remove();
+      routeLine = null;
     }
     // Clear plane marker
     if (planeMarker) {
-      planeMarker.setMap(null);
+      planeMarker.remove();
       planeMarker = null;
     }
     // Clear animation timer
@@ -467,7 +506,6 @@
       clearInterval(planeTimer);
       planeTimer = null;
     }
-    planePosition = 0;
   }
   
   function renderRoute(route) {
@@ -480,8 +518,8 @@
     }
     
     // Ensure map is initialized
-    if (typeof google === 'undefined' || !google.maps) {
-      console.error('Google Maps library not loaded');
+    if (typeof L === 'undefined') {
+      console.error('Leaflet library not loaded');
       return;
     }
     
@@ -490,6 +528,7 @@
       // Wait for map to initialize, then render route
       setTimeout(() => {
         if (map) {
+          map.invalidateSize(); // Fix for hidden containers
           renderRoute(route);
         } else {
           console.error('Map failed to initialize');
@@ -502,70 +541,94 @@
     clearMap();
     
     try {
-      const fromLatLng = new google.maps.LatLng(from.lat, from.lon);
-      const toLatLng = new google.maps.LatLng(to.lat, to.lon);
-      
       // Add origin marker
-      const originMarker = new google.maps.Marker({
-        position: fromLatLng,
-        map: map,
-        title: from.city || 'Origin',
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 8,
-          fillColor: '#10b981',
-          fillOpacity: 1,
-          strokeColor: '#ffffff',
-          strokeWeight: 2
-        }
-      });
+      const originMarker = L.marker([from.lat, from.lon], {
+        icon: L.divIcon({
+          className: 'custom-marker',
+          html: '<div style="width:16px;height:16px;background:#10b981;border:2px solid white;border-radius:50%;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>',
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        })
+      }).addTo(map).bindPopup(from.city || 'Origin');
       markers.push(originMarker);
       
       // Add destination marker
-      const destMarker = new google.maps.Marker({
-        position: toLatLng,
-        map: map,
-        title: to.city || 'Destination',
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 8,
-          fillColor: '#ef4444',
-          fillOpacity: 1,
-          strokeColor: '#ffffff',
-          strokeWeight: 2
-        }
-      });
+      const destMarker = L.marker([to.lat, to.lon], {
+        icon: L.divIcon({
+          className: 'custom-marker',
+          html: '<div style="width:16px;height:16px;background:#ef4444;border:2px solid white;border-radius:50%;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>',
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        })
+      }).addTo(map).bindPopup(to.city || 'Destination');
       markers.push(destMarker);
       
       // Add route polyline
-      routePolyline = new google.maps.Polyline({
-        path: [fromLatLng, toLatLng],
-        geodesic: true,
-        strokeColor: '#8b5cf6',
-        strokeOpacity: 0.8,
-        strokeWeight: 3,
-        icons: [{
-          icon: {
-            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-            scale: 4,
-            strokeColor: '#8b5cf6'
-          },
-          offset: '50%',
-          repeat: '100px'
-        }]
-      });
-      routePolyline.setMap(map);
+      routeLine = L.polyline([[from.lat, from.lon], [to.lat, to.lon]], { 
+        color: '#8b5cf6', 
+        weight: 3,
+        opacity: 0.8,
+        dashArray: '10, 10'
+      }).addTo(map);
       
-      // Fit map to show both points
-      const bounds = new google.maps.LatLngBounds();
-      bounds.extend(fromLatLng);
-      bounds.extend(toLatLng);
-      map.fitBounds(bounds, { padding: 50 });
+      // Fit map to show both points with proper zoom out
+      const bounds = L.latLngBounds([[from.lat, from.lon], [to.lat, to.lon]]);
+      
+      // Calculate distance to determine appropriate padding
+      const distanceKm = haversineKm(from.lat, from.lon, to.lat, to.lon);
+      
+      // Use larger padding to ensure proper zoom out (percentage of viewport)
+      // Convert to pixel padding - use larger values for better zoom out
+      const mapContainer = document.getElementById('map');
+      const containerWidth = mapContainer ? mapContainer.offsetWidth : 800;
+      const containerHeight = mapContainer ? mapContainer.offsetHeight : 600;
+      
+      // Use 20% padding on all sides for better zoom out
+      const paddingPixels = [
+        Math.max(100, containerHeight * 0.2), // Top/bottom padding
+        Math.max(100, containerWidth * 0.2)   // Left/right padding
+      ];
+      
+      // Adjust max zoom based on distance - lower for longer routes
+      let maxZoom = 10; // Default max zoom
+      if (distanceKm > 2000) {
+        maxZoom = 6; // Very long routes - zoom out more
+      } else if (distanceKm > 1000) {
+        maxZoom = 8; // Long routes
+      } else if (distanceKm > 500) {
+        maxZoom = 9; // Medium-long routes
+      } else if (distanceKm < 50) {
+        maxZoom = 12; // Short routes can zoom in more
+      }
+      
+      // Fit bounds with generous padding and lower max zoom
+      map.fitBounds(bounds, { 
+        padding: paddingPixels,
+        maxZoom: maxZoom
+      });
+      
+      // Important: Invalidate size after fitting bounds
+      setTimeout(() => {
+        map.invalidateSize();
+        // Re-fit bounds after invalidation with same settings
+        map.fitBounds(bounds, { 
+          padding: paddingPixels,
+          maxZoom: maxZoom
+        });
+        
+        // Double-check: if zoom is still too high, force a lower zoom
+        setTimeout(() => {
+          if (map.getZoom() > maxZoom) {
+            map.setZoom(maxZoom);
+            map.panTo(bounds.getCenter());
+          }
+        }, 100);
+      }, 200);
       
       // Animate plane along the route
-    animatePlane([from.lat, from.lon], [to.lat, to.lon]);
+      animatePlane([from.lat, from.lon], [to.lat, to.lon]);
       
-      console.log('Route rendered successfully with Google Maps');
+      console.log('Route rendered successfully with Leaflet');
     } catch (e) {
       console.error('Error rendering route:', e);
     }
@@ -574,27 +637,21 @@
   function animatePlane(start, end) {
     if (!map) return;
     
-    const startLatLng = new google.maps.LatLng(start[0], start[1]);
-    const endLatLng = new google.maps.LatLng(end[0], end[1]);
-    
-    // Create plane marker with custom icon
-    planeMarker = new google.maps.Marker({
-      position: startLatLng,
-      map: map,
-      icon: {
-        path: 'M 0,0 L 20,10 L 0,20 L 10,10 Z',
-        fillColor: '#10b981',
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2,
-        scale: 1.5,
-        rotation: 0,
-        anchor: new google.maps.Point(10, 10)
-      },
-      zIndex: 1000
+    // Create plane icon
+    const planeIcon = L.divIcon({
+      className: 'plane-icon',
+      html: '<div class="plane" style="font-size: 24px; transform: rotate(0deg);">✈️</div>',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
     });
     
-    const distanceKm = haversineKm(start[0], start[1], end[0], end[1]);
+    if (planeMarker) { planeMarker.remove(); }
+    planeMarker = L.marker(start, { icon: planeIcon }).addTo(map);
+    
+    const lat1 = start[0], lon1 = start[1];
+    const lat2 = end[0], lon2 = end[1];
+    
+    const distanceKm = haversineKm(lat1, lon1, lat2, lon2);
     const duration = Math.min(20, Math.max(8, 8 + 0.5 * (distanceKm / 1000)));
     const fps = 60;
     const totalSteps = Math.floor(duration * fps);
@@ -606,30 +663,26 @@
       step += 1;
       const t = Math.min(1, step / totalSteps);
       const eased = easeInOutCubic(t);
-      
-      // Calculate current position along the route
-      const lat = start[0] + (end[0] - start[0]) * eased;
-      const lon = start[1] + (end[1] - start[1]) * eased;
-      const currentPos = new google.maps.LatLng(lat, lon);
+      const lat = lat1 + (lat2 - lat1) * eased;
+      const lon = lon1 + (lon2 - lon1) * eased;
+      planeMarker.setLatLng([lat, lon]);
       
       // Calculate bearing (direction) towards destination
-      const bearing = google.maps.geometry.spherical.computeHeading(
-        currentPos,
-        endLatLng
-      );
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const lat1Rad = lat1 * Math.PI / 180;
+      const lat2Rad = lat2 * Math.PI / 180;
+      const y = Math.sin(dLon) * Math.cos(lat2Rad);
+      const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+      const bearing = Math.atan2(y, x) * 180 / Math.PI;
       
-      // Update plane position and rotation
-      planeMarker.setPosition(currentPos);
-      planeMarker.setIcon({
-        path: 'M 0,0 L 20,10 L 0,20 L 10,10 Z',
-        fillColor: '#10b981',
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2,
-        scale: 1.5,
-        rotation: bearing, // Rotate plane towards destination
-        anchor: new google.maps.Point(10, 10)
-      });
+      // Update plane rotation
+      const el = planeMarker.getElement();
+      if (el) {
+        const inner = el.querySelector('.plane');
+        if (inner) {
+          inner.style.transform = `rotate(${bearing}deg)`;
+        }
+      }
       
       if (t >= 1) {
         // Loop animation - restart from beginning
@@ -1204,24 +1257,43 @@
   }
   
   // Ensure map initializes when container is visible (mapContainer already declared above)
+  // This fixes the Leaflet issue where map doesn't render properly in hidden containers
   const mapObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
       if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
         const mapContainerEl = document.getElementById('mapContainer');
-        if (mapContainerEl && mapContainerEl.style.display !== 'none' && !map) {
-          // Wait for Google Maps to load if needed
-          if (typeof google !== 'undefined' && google.maps) {
-            setTimeout(() => initMap(), 100);
+        if (mapContainerEl && mapContainerEl.style.display !== 'none') {
+          // Wait for Leaflet to load if needed
+          if (typeof L !== 'undefined') {
+            if (!map) {
+              setTimeout(() => {
+                initMap();
+                // Important: Invalidate size after container becomes visible
+                if (map) {
+                  setTimeout(() => map.invalidateSize(), 200);
+                }
+              }, 100);
+            } else {
+              // Map exists but container just became visible - invalidate size
+              setTimeout(() => {
+                map.invalidateSize();
+              }, 200);
+            }
           } else {
-            // Wait for Google Maps script to load
-            const checkGoogleMaps = setInterval(() => {
-              if (typeof google !== 'undefined' && google.maps) {
-                clearInterval(checkGoogleMaps);
-                setTimeout(() => initMap(), 100);
+            // Wait for Leaflet script to load
+            const checkLeaflet = setInterval(() => {
+              if (typeof L !== 'undefined') {
+                clearInterval(checkLeaflet);
+                setTimeout(() => {
+                  initMap();
+                  if (map) {
+                    setTimeout(() => map.invalidateSize(), 200);
+                  }
+                }, 100);
               }
             }, 100);
             // Timeout after 5 seconds
-            setTimeout(() => clearInterval(checkGoogleMaps), 5000);
+            setTimeout(() => clearInterval(checkLeaflet), 5000);
           }
         }
       }
