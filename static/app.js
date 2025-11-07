@@ -140,21 +140,41 @@
     // Use data URI as fallback to avoid network requests
     const placeholderDataUri = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2YwZjBmMCIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiM5OTk5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5Ib3RlbCBJbWFnZTwvdGV4dD48L3N2Zz4=';
     
+    // Configure image for better loading
+    img.loading = 'lazy'; // Lazy load images
+    img.alt = h.name || 'Hotel image';
+    img.style.objectFit = 'cover';
+    img.style.width = '100%';
+    img.style.height = '200px';
+    
     // Set initial image source
     if (h.image_url && h.image_url.trim() && !h.image_url.includes('placeholder')) {
+      // Try to load the actual image
+      // Don't set crossOrigin for Google images - they should work without it
       img.src = h.image_url;
+      
+      // Add loading state
+      img.style.backgroundColor = '#f0f0f0';
+      img.style.minHeight = '200px';
+      
       img.onerror = function() {
         // Prevent infinite loop - only set once
-        if (this.src !== placeholderDataUri) {
+        if (this.src !== placeholderDataUri && !this.src.startsWith('data:')) {
+          console.log('Failed to load hotel image:', h.image_url);
           this.src = placeholderDataUri;
           this.onerror = null; // Remove error handler to prevent loops
         }
+      };
+      
+      img.onload = function() {
+        // Image loaded successfully
+        this.style.backgroundColor = 'transparent';
       };
     } else {
       img.src = placeholderDataUri;
       img.onerror = null; // No error handler needed for data URI
     }
-    img.alt = h.name || 'Hotel image';
+    
     div.appendChild(img);
     const content = document.createElement('div');
     content.className = 'card-content';
@@ -712,6 +732,56 @@
   const originalRenderResults = () => {
     // This will be called after results are rendered
   };
+  
+  // Resize handle functionality
+  const leftPanel = document.getElementById('leftPanel');
+  const resizeHandle = document.getElementById('resizeHandle');
+  let isResizing = false;
+  let startX = 0;
+  let startWidth = 0;
+  
+  resizeHandle.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    startX = e.clientX;
+    startWidth = leftPanel.offsetWidth;
+    resizeHandle.classList.add('active');
+    leftPanel.style.transition = 'none'; // Disable transitions during resize
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+    
+    const diff = e.clientX - startX;
+    const newWidth = startWidth + diff;
+    const minWidth = 300;
+    const maxWidth = window.innerWidth * 0.6; // Max 60% of window width
+    
+    if (newWidth >= minWidth && newWidth <= maxWidth) {
+      leftPanel.style.width = newWidth + 'px';
+    }
+  });
+  
+  document.addEventListener('mouseup', () => {
+    if (isResizing) {
+      isResizing = false;
+      resizeHandle.classList.remove('active');
+      leftPanel.style.transition = ''; // Re-enable transitions
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      
+      // Save width to localStorage
+      localStorage.setItem('leftPanelWidth', leftPanel.style.width);
+    }
+  });
+  
+  // Restore saved width on load
+  const savedWidth = localStorage.getItem('leftPanelWidth');
+  if (savedWidth) {
+    leftPanel.style.width = savedWidth;
+  }
   
   // Initialize
   initMap();

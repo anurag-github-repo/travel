@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Travel Assistant</title>
+  <title>Naveo AI</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -17,7 +17,43 @@
     .container { display: flex; height: 100vh; overflow: hidden; }
     
     /* Left Panel */
-    .left { width: 420px; background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+    .left { width: 420px; min-width: 300px; max-width: 60%; background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+    
+    /* Resize Handle */
+    .resize-handle { 
+      position: absolute; 
+      right: -4px; 
+      top: 0; 
+      bottom: 0; 
+      width: 8px; 
+      cursor: col-resize; 
+      z-index: 10;
+      background: transparent;
+      transition: background 0.2s;
+    }
+    .resize-handle:hover { 
+      background: rgba(16, 185, 129, 0.2); 
+    }
+    .resize-handle.active { 
+      background: rgba(16, 185, 129, 0.4); 
+    }
+    .resize-handle::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 2px;
+      height: 40px;
+      background: #10b981;
+      border-radius: 1px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .resize-handle:hover::before,
+    .resize-handle.active::before {
+      opacity: 1;
+    }
     .left-header { padding: 20px; border-bottom: 1px solid #e0e0e0; }
     .left-header h1 { margin: 0; font-size: 20px; font-weight: 600; }
     
@@ -119,7 +155,7 @@
     .card { background: white; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; transition: all 0.3s; animation: slideUp 0.4s ease-out; }
     @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
     .card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
-    .card img { width: 100%; height: 200px; object-fit: cover; }
+    .card img { width: 100%; height: 200px; object-fit: cover; background: #f0f0f0; display: block; }
     .card-content { padding: 20px; }
     .card-title { font-weight: 600; font-size: 18px; margin-bottom: 12px; }
     .card-detail { font-size: 14px; color: #666; margin: 8px 0; }
@@ -181,9 +217,10 @@
 <body>
   <div class="container">
     <!-- Left Panel -->
-    <section class="left">
+    <section class="left" id="leftPanel">
+      <div class="resize-handle" id="resizeHandle"></div>
       <div class="left-header">
-        <h1>Travel Assistant</h1>
+        <h1>Naveo AI</h1>
       </div>
       
       <!-- Chat Section -->
