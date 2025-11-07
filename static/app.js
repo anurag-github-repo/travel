@@ -1,6 +1,7 @@
 (() => {
   // UI Elements
   const chatMessagesEl = document.getElementById('chatMessages');
+  const chatContentEl = document.querySelector('.chat-content'); // The scrollable container
   const chatInputEl = document.getElementById('chatInput');
   const chatSendBtn = document.getElementById('chatSendBtn');
   const flightsEl = document.getElementById('flights');
@@ -21,41 +22,44 @@
     extractedInfo: {}
   };
   
-  // Map
+  // Map - Google Maps
   let map;
   let markers = [];
-  let routeLine;
+  let routePolyline;
   let planeMarker;
   let planeTimer;
+  let planePosition = 0; // Animation position (0 to 1)
   const sessionId = (() => Math.random().toString(36).slice(2))();
   
-  // Initialize map with faster static image approach
+  // Initialize Google Maps
   function initMap() {
     if (!map && document.getElementById('map')) {
-      try {
-        // Use Leaflet with a faster tile server
-        map = L.map('map', {
-          preferCanvas: true,
-          zoomControl: true,
-          loadingControl: true
-        });
-        // Use CartoDB Positron tiles - faster and lighter
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-          subdomains: 'abcd',
-          maxZoom: 19
-        }).addTo(map);
-        map.setView([20.0, 78.0], 4);
-        map.whenReady(() => {
-          console.log('Map initialized successfully');
-        });
-      } catch (e) {
-        console.error('Error initializing map:', e);
-        // Fallback: show a static map image
-        const mapEl = document.getElementById('map');
-        if (mapEl) {
-          mapEl.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f0f0f0;color:#666;"><p>Map loading...</p></div>';
+      const mapEl = document.getElementById('map');
+      
+      // Clear any existing content
+      mapEl.innerHTML = '';
+      
+      // Check if Google Maps is available
+      if (typeof google !== 'undefined' && google.maps) {
+        try {
+          map = new google.maps.Map(mapEl, {
+            center: { lat: 20.0, lng: 78.0 },
+            zoom: 4,
+            mapTypeId: 'roadmap',
+            zoomControl: true,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: true
+          });
+          
+          console.log('Google Maps initialized successfully');
+        } catch (e) {
+          console.error('Error initializing Google Maps:', e);
+          mapEl.innerHTML = '<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;padding:20px;text-align:center;"><div style="font-size:48px;margin-bottom:10px;">🗺️</div><p style="margin-bottom:5px;font-size:16px;font-weight:600;">Map Loading...</p></div>';
         }
+      } else {
+        // Google Maps not available - show placeholder
+        mapEl.innerHTML = '<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;padding:20px;text-align:center;"><div style="font-size:48px;margin-bottom:10px;">🗺️</div><p style="margin-bottom:5px;font-size:16px;font-weight:600;">Interactive Map</p><p style="font-size:12px;opacity:0.9;">Map will appear when route is available</p></div>';
       }
     }
   }
@@ -166,6 +170,44 @@
     return { code: timeStr, time: '' };
   }
   
+  // Helper function to scroll to bottom - optimized for performance
+  let lastScrollTime = 0;
+  let scrollPending = false;
+  
+  function scrollToBottom(force = false) {
+    // The scrollable container is .chat-content, not chatMessages
+    const scrollContainer = chatContentEl || chatMessagesEl;
+    if (!scrollContainer) return;
+    
+    // Throttle scroll calls to avoid lag (max once per 50ms)
+    const now = Date.now();
+    if (!force && now - lastScrollTime < 50) {
+      if (!scrollPending) {
+        scrollPending = true;
+        requestAnimationFrame(() => {
+          scrollPending = false;
+          scrollToBottom(force);
+        });
+      }
+      return;
+    }
+    lastScrollTime = now;
+    
+    // Check if already near bottom (within 100px) - don't scroll if user scrolled up
+    const isNearBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 100;
+    if (!force && !isNearBottom) {
+      // User has scrolled up, don't auto-scroll
+      return;
+    }
+    
+    // Use fast scroll (auto instead of smooth for better performance)
+    try {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    } catch (e) {
+      console.warn('Scroll failed:', e);
+    }
+  }
+  
   // Add message with animation
   function addMsg(text, who, flights = null) {
     const div = document.createElement('div');
@@ -181,7 +223,11 @@
       div.textContent = text; // User messages stay as plain text
     }
     chatMessagesEl.appendChild(div);
-    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+    
+    // Scroll to bottom after adding message (single call, optimized)
+    requestAnimationFrame(() => {
+      scrollToBottom();
+    });
   }
   
   // Show loading indicator
@@ -191,7 +237,7 @@
     div.id = 'loadingMsg';
     div.innerHTML = '<span class="loading"></span> Searching...';
     chatMessagesEl.appendChild(div);
-    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+    scrollToBottom();
   }
   
   // Remove loading indicator
@@ -396,77 +442,194 @@
     return div;
   }
   
-  // Map functions
+  // Map functions - Google Maps
   function ensureMap() {
     if (!map) initMap();
   }
   
   function clearMap() {
     if (!map) return;
-    markers.forEach(m => m.remove());
+    // Clear markers
+    markers.forEach(m => m.setMap(null));
     markers = [];
-    if (routeLine) { routeLine.remove(); routeLine = null; }
-    if (planeMarker) { planeMarker.remove(); planeMarker = null; }
-    if (planeTimer) { clearInterval(planeTimer); planeTimer = null; }
+    // Clear polyline
+    if (routePolyline) {
+      routePolyline.setMap(null);
+      routePolyline = null;
+    }
+    // Clear plane marker
+    if (planeMarker) {
+      planeMarker.setMap(null);
+      planeMarker = null;
+    }
+    // Clear animation timer
+    if (planeTimer) {
+      clearInterval(planeTimer);
+      planeTimer = null;
+    }
+    planePosition = 0;
   }
   
   function renderRoute(route) {
     if (!route) return;
     const from = route.from || {};
     const to = route.to || {};
-    if (from.lat == null || from.lon == null || to.lat == null || to.lon == null) return;
-    ensureMap();
+    if (from.lat == null || from.lon == null || to.lat == null || to.lon == null) {
+      console.warn('Route data incomplete:', route);
+      return;
+    }
+    
+    // Ensure map is initialized
+    if (typeof google === 'undefined' || !google.maps) {
+      console.error('Google Maps library not loaded');
+      return;
+    }
+    
+    if (!map) {
+      initMap();
+      // Wait for map to initialize, then render route
+      setTimeout(() => {
+        if (map) {
+          renderRoute(route);
+        } else {
+          console.error('Map failed to initialize');
+        }
+      }, 1000);
+      return;
+    }
+    
+    // Clear existing markers and routes
     clearMap();
     
-    const a = L.marker([from.lat, from.lon]).addTo(map).bindPopup(from.city || 'From');
-    const b = L.marker([to.lat, to.lon]).addTo(map).bindPopup(to.city || 'To');
-    markers.push(a, b);
-    
-    routeLine = L.polyline([[from.lat, from.lon], [to.lat, to.lon]], { 
-      color: '#8b5cf6', 
-      weight: 3,
-      dashArray: '10, 10'
-    }).addTo(map);
-    
-    map.fitBounds(routeLine.getBounds(), { padding: [50, 50] });
+    try {
+      const fromLatLng = new google.maps.LatLng(from.lat, from.lon);
+      const toLatLng = new google.maps.LatLng(to.lat, to.lon);
+      
+      // Add origin marker
+      const originMarker = new google.maps.Marker({
+        position: fromLatLng,
+        map: map,
+        title: from.city || 'Origin',
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: '#10b981',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 2
+        }
+      });
+      markers.push(originMarker);
+      
+      // Add destination marker
+      const destMarker = new google.maps.Marker({
+        position: toLatLng,
+        map: map,
+        title: to.city || 'Destination',
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: '#ef4444',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 2
+        }
+      });
+      markers.push(destMarker);
+      
+      // Add route polyline
+      routePolyline = new google.maps.Polyline({
+        path: [fromLatLng, toLatLng],
+        geodesic: true,
+        strokeColor: '#8b5cf6',
+        strokeOpacity: 0.8,
+        strokeWeight: 3,
+        icons: [{
+          icon: {
+            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+            scale: 4,
+            strokeColor: '#8b5cf6'
+          },
+          offset: '50%',
+          repeat: '100px'
+        }]
+      });
+      routePolyline.setMap(map);
+      
+      // Fit map to show both points
+      const bounds = new google.maps.LatLngBounds();
+      bounds.extend(fromLatLng);
+      bounds.extend(toLatLng);
+      map.fitBounds(bounds, { padding: 50 });
+      
+      // Animate plane along the route
     animatePlane([from.lat, from.lon], [to.lat, to.lon]);
+      
+      console.log('Route rendered successfully with Google Maps');
+    } catch (e) {
+      console.error('Error rendering route:', e);
+    }
   }
   
   function animatePlane(start, end) {
-    const planeIcon = L.divIcon({
-      className: 'plane-icon',
-      html: '<div class="plane" style="font-size: 24px;">✈️</div>',
-      iconSize: [32, 32],
-      iconAnchor: [16, 16]
+    if (!map) return;
+    
+    const startLatLng = new google.maps.LatLng(start[0], start[1]);
+    const endLatLng = new google.maps.LatLng(end[0], end[1]);
+    
+    // Create plane marker with custom icon
+    planeMarker = new google.maps.Marker({
+      position: startLatLng,
+      map: map,
+      icon: {
+        path: 'M 0,0 L 20,10 L 0,20 L 10,10 Z',
+        fillColor: '#10b981',
+        fillOpacity: 1,
+        strokeColor: '#ffffff',
+        strokeWeight: 2,
+        scale: 1.5,
+        rotation: 0,
+        anchor: new google.maps.Point(10, 10)
+      },
+      zIndex: 1000
     });
     
-    if (planeMarker) { planeMarker.remove(); }
-    planeMarker = L.marker(start, { icon: planeIcon }).addTo(map);
-    
-    const lat1 = start[0], lon1 = start[1];
-    const lat2 = end[0], lon2 = end[1];
-    
-    const distanceKm = haversineKm(lat1, lon1, lat2, lon2);
+    const distanceKm = haversineKm(start[0], start[1], end[0], end[1]);
     const duration = Math.min(20, Math.max(8, 8 + 0.5 * (distanceKm / 1000)));
     const fps = 60;
     const totalSteps = Math.floor(duration * fps);
     let step = 0;
     
     if (planeTimer) { clearInterval(planeTimer); }
+    
     planeTimer = setInterval(() => {
       step += 1;
       const t = Math.min(1, step / totalSteps);
       const eased = easeInOutCubic(t);
-      const lat = lat1 + (lat2 - lat1) * eased;
-      const lon = lon1 + (lon2 - lon1) * eased;
-      planeMarker.setLatLng([lat, lon]);
       
-      const bearing = Math.atan2(lon2 - lon1, lat2 - lat1) * 180 / Math.PI;
-      const el = planeMarker.getElement();
-      if (el) {
-        const inner = el.querySelector('.plane');
-        if (inner) inner.style.transform = `rotate(${bearing}deg)`;
-      }
+      // Calculate current position along the route
+      const lat = start[0] + (end[0] - start[0]) * eased;
+      const lon = start[1] + (end[1] - start[1]) * eased;
+      const currentPos = new google.maps.LatLng(lat, lon);
+      
+      // Calculate bearing (direction) towards destination
+      const bearing = google.maps.geometry.spherical.computeHeading(
+        currentPos,
+        endLatLng
+      );
+      
+      // Update plane position and rotation
+      planeMarker.setPosition(currentPos);
+      planeMarker.setIcon({
+        path: 'M 0,0 L 20,10 L 0,20 L 10,10 Z',
+        fillColor: '#10b981',
+        fillOpacity: 1,
+        strokeColor: '#ffffff',
+        strokeWeight: 2,
+        scale: 1.5,
+        rotation: bearing, // Rotate plane towards destination
+        anchor: new google.maps.Point(10, 10)
+      });
       
       if (t >= 1) {
         // Loop animation - restart from beginning
@@ -816,6 +979,11 @@
         }
       }
       
+      // Final scroll to ensure all content is visible (single optimized call)
+      requestAnimationFrame(() => {
+        setTimeout(() => scrollToBottom(true), 200);
+      });
+      
       // Removed auto-trigger - only search when user explicitly asks
     } catch (e) {
       hideLoading();
@@ -1041,7 +1209,20 @@
       if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
         const mapContainerEl = document.getElementById('mapContainer');
         if (mapContainerEl && mapContainerEl.style.display !== 'none' && !map) {
-          setTimeout(() => initMap(), 100);
+          // Wait for Google Maps to load if needed
+          if (typeof google !== 'undefined' && google.maps) {
+            setTimeout(() => initMap(), 100);
+          } else {
+            // Wait for Google Maps script to load
+            const checkGoogleMaps = setInterval(() => {
+              if (typeof google !== 'undefined' && google.maps) {
+                clearInterval(checkGoogleMaps);
+                setTimeout(() => initMap(), 100);
+              }
+            }, 100);
+            // Timeout after 5 seconds
+            setTimeout(() => clearInterval(checkGoogleMaps), 5000);
+          }
         }
       }
     });
@@ -1051,6 +1232,45 @@
     mapObserver.observe(mapContainerEl, { attributes: true, attributeFilter: ['style'] });
   }
   
-  // Initialize
+  // Auto-scroll observer - watch for new messages and scroll automatically (optimized)
+  let scrollTimeout = null;
+  const scrollObserver = new MutationObserver((mutations) => {
+    // Only scroll if new content was added
+    let shouldScroll = false;
+    mutations.forEach(mutation => {
+      if (mutation.addedNodes.length > 0) {
+        // Check if it's a message node, not just attribute changes
+        for (let node of mutation.addedNodes) {
+          if (node.nodeType === 1 && (node.classList.contains('msg') || node.querySelector('.msg'))) {
+            shouldScroll = true;
+            break;
+          }
+        }
+      }
+    });
+    
+    if (shouldScroll) {
+      // Debounce scroll to avoid excessive calls (longer delay for better performance)
+      if (scrollTimeout) clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        scrollToBottom();
+      }, 150);
+    }
+  });
+  
+  if (chatMessagesEl) {
+    scrollObserver.observe(chatMessagesEl, {
+      childList: true,
+      subtree: false, // Only watch direct children, not deep subtree
+      attributes: false
+    });
+  }
+  
+  // Initialize with greeting message
+  if (chatMessagesEl && chatMessagesEl.children.length === 0) {
+    addMsg('Hi there! I am Naveo AI agent. How can I help you plan your trip today? ✈️', 'bot');
+  }
+  
+  // Initialize map
   initMap();
 })();
