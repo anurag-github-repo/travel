@@ -314,41 +314,57 @@ async def chat(req: ChatRequest):
             tool_calls.append({"name": fn, "args": args})
 
             # Execute tool
+            result = None
+            structured = None
+            
             if fn == 'find_flights':
-                # Update context
-                context["origin"] = args.get('departure_city', context.get("origin", ""))
-                context["destination"] = args.get('arrival_city', context.get("destination", ""))
-                context["depart_date"] = args.get('outbound_date', context.get("depart_date", ""))
-                context["return_date"] = args.get('return_date', context.get("return_date", ""))
-                context["round_trip"] = args.get('return_date') is not None
-                
-                # Get structured flights for UI first
-                try:
-                    from travel_chatbot import get_iata_for_city, search_google_flights, get_city_coords
-                    dep = await get_iata_for_city(args.get('departure_city'))
-                    arr = await get_iata_for_city(args.get('arrival_city'))
-                    app_logger.info(f"Searching flights: {dep} -> {arr} on {args.get('outbound_date')}")
-                    flights = await search_google_flights(dep, arr, args.get('outbound_date'), args.get('return_date'))
-                    app_logger.info(f"Found {len(flights)} flights")
-                    route = {
-                        "from": {"city": args.get('departure_city'), **(get_city_coords(args.get('departure_city')) or {})},
-                        "to": {"city": args.get('arrival_city'), **(get_city_coords(args.get('arrival_city')) or {})}
-                    }
-                except Exception as e:
-                    app_logger.error(f"Error searching flights: {e}", exc_info=True)
+                # Validate required arguments
+                if not args.get('departure_city') or not args.get('arrival_city') or not args.get('outbound_date'):
+                    result = "Missing required information: departure city, arrival city, and outbound date are required."
+                    structured = None
+                else:
                     flights = []
                     route = None
-                
-                # Get summary text from find_flights (which also does the search internally)
-                result = await find_flights(**args)
-                
-                structured: Optional[Dict[str, Any]] = {"flights": flights, "route": route}
-                
-                # Use the result text from find_flights, which has the flight summary
-                if result and not out_text:
-                    out_text = result
-                elif result and out_text:
-                    out_text += "\n\n" + result
+                    # Update context
+                    context["origin"] = args.get('departure_city', context.get("origin", ""))
+                    context["destination"] = args.get('arrival_city', context.get("destination", ""))
+                    context["depart_date"] = args.get('outbound_date', context.get("depart_date", ""))
+                    context["return_date"] = args.get('return_date', context.get("return_date", ""))
+                    context["round_trip"] = args.get('return_date') is not None
+                    
+                    # Get structured flights for UI first
+                    try:
+                        from travel_chatbot import get_iata_for_city, search_google_flights, get_city_coords
+                        dep = await get_iata_for_city(args.get('departure_city'))
+                        arr = await get_iata_for_city(args.get('arrival_city'))
+                        app_logger.info(f"Searching flights: {dep} -> {arr} on {args.get('outbound_date')}")
+                        flights = await search_google_flights(dep, arr, args.get('outbound_date'), args.get('return_date'))
+                        app_logger.info(f"Found {len(flights)} flights")
+                        route = {
+                            "from": {"city": args.get('departure_city'), **(get_city_coords(args.get('departure_city')) or {})},
+                            "to": {"city": args.get('arrival_city'), **(get_city_coords(args.get('arrival_city')) or {})}
+                        }
+                    except Exception as e:
+                        app_logger.error(f"Error searching flights: {e}", exc_info=True)
+                        flights = []
+                        route = None
+                    
+                    # Get summary text from find_flights (which also does the search internally)
+                    try:
+                        result = await find_flights(**args)
+                    except TypeError as e:
+                        app_logger.error(f"Error calling find_flights with args {args}: {e}", exc_info=True)
+                        result = f"Error searching for flights: {str(e)}"
+                        flights = []
+                        route = None
+                    
+                    structured: Optional[Dict[str, Any]] = {"flights": flights, "route": route}
+                    
+                    # Use the result text from find_flights, which has the flight summary
+                    if result and not out_text:
+                        out_text = result
+                    elif result and out_text:
+                        out_text += "\n\n" + result
             elif fn == 'find_hotels':
                 # Update context
                 location = args.get('location', '')
