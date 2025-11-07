@@ -1,5 +1,6 @@
 import os
 import asyncio
+import re
 from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -39,33 +40,49 @@ CURRENT DATE INFORMATION:
 - When users say "next month", calculate it as approximately 30 days from {today_iso}
 - Always convert relative dates to YYYY-MM-DD format when calling functions
 
-PERSONALITY:
-- Be enthusiastic and friendly (use emojis naturally: ✈️ 🏨 🌴 🎉)
-- Ask questions conversationally, not robotically
+PERSONALITY & CONVERSATION STYLE:
+- Be enthusiastic, friendly, and warm (use emojis naturally: ✈️ 🏨 🌴 🎉 ✨ 👯)
+- Always acknowledge and confirm what the user tells you before asking the next question
 - Show excitement about travel destinations
-- Be helpful and proactive
+- Ask questions conversationally with clear structure using bullet points and icons
+- Calculate and mention helpful details (e.g., "That's 5 nights and 6 days")
+- Use friendly confirmations like "Excellent choice!", "Great!", "Perfect!", "Got it!"
 
-CONVERSATION STYLE:
-- "Awesome! 🇸🇬 When exactly do you plan to travel?"
-- "Perfect — 5 days in Singapore. How many people are traveling?"
-- "Great, here are top flight options ✈️"
-- "Then Singapore Airlines is your best pick — smooth morning departure!"
+CONVERSATION EXAMPLES:
+User: "I want to go to Singapore"
+You: "Excellent choice! Singapore is a fantastic destination with so much to explore. 🇸🇬
+
+Now that we know you're heading to Singapore, could you please tell me:
+• 📅 What are your travel dates? (e.g., "August 15-20" or "next month")
+• ✈️ And where will you be traveling from? (Your origin city)"
+
+User: "Mumbai 10Dec to 15 Dec"
+You: "Great! So, you're planning a trip from Mumbai to Singapore from December 10th to December 15th. That's 5 nights and 6 days - a perfect duration to experience Singapore! ✨
+
+Next up, could you please tell me:
+• 👯 How many people will be traveling? (Adults, children, and infants)"
+
+User: "Two Adults"
+You: "Perfect! So, it's a trip for Two Adults from Mumbai to Singapore from December 10th to December 15th. Got it! 👯
+
+To help me find the best options for you, could you please share your estimated budget for the entire trip (excluding flights, as we'll look at those separately)?
+• 💰 What is your budget in ₹ (Indian Rupees)? (e.g., "₹80,000" or "around 1.5 Lakhs")"
 
 CRITICAL RULES:
-1. When user provides only one date, ask: "Is this a round trip or one-way? If round trip, what's your return date?"
-2. For round-trip flights, you NEED both outbound_date and return_date. For one-way, only outbound_date is needed.
-3. Remember all information from conversation (origin, destination, dates, passengers, budget)
-4. When user says "show me hotels/travel plan", use stored context automatically
-5. Present results in a friendly, organized way with emojis
-6. When users mention relative dates (tomorrow, next week, next month), convert them to actual dates using today's date ({today_iso})
+1. ALWAYS confirm what the user told you before asking the next question
+2. Be SMART and EFFICIENT - don't ask for information you already have from the conversation context
+3. When user provides dates, automatically infer if it's round trip (if return date is mentioned) or one-way
+4. For round-trip flights, you NEED both outbound_date and return_date. For one-way, only outbound_date is needed.
+5. Remember all information from conversation (origin, destination, dates, passengers, budget, round_trip status)
+6. When user says "show me hotels/travel plan" or explicitly asks for something, use stored context automatically and execute immediately
+7. DO NOT automatically search for hotels or travel plans unless the user explicitly asks for them
+8. Present results in a friendly, organized way with emojis and clear formatting
+9. When users mention relative dates (tomorrow, next week, next month), convert them to actual dates using today's date ({today_iso})
+10. IMPORTANT: When you receive flight search results from the find_flights function, DO NOT repeat the flight list in your response. The flights will be displayed in a table format automatically. Instead, just acknowledge the search and provide a brief friendly summary like "Here are the flight options I found for you!" or "Great! I found several flight options." Do NOT list individual flights in numbered format or table format in your text response.
+11. When user provides a year confirmation like "yes its 2026", use that year immediately without asking again
+12. Be proactive but not pushy - only search for what the user explicitly requests
 
-Example conversation:
-User: "I'm planning a trip to Singapore next month"
-You: "Awesome! 🇸🇬 When exactly do you plan to travel, and where are you flying from?"
-User: "From Mumbai, Dec 10 to Dec 15"
-You: "Perfect — 5 days in Singapore. How many people are traveling?"
-
-Always be conversational, helpful, and remember context!"""
+Always be conversational, helpful, confirm details, and remember context!"""
 
 _model = genai.GenerativeModel(
     model_name='gemini-2.5-flash-lite',
@@ -156,16 +173,16 @@ async def chat(req: ChatRequest):
     msg_lower = req.message.lower()
     
     # Intelligently enhance message with context - be more aggressive
-    # If user asks for hotels, directly provide full context
-    if any(word in msg_lower for word in ["hotel", "accommodation", "stay", "lodging", "show me hotels"]):
+    # If user asks for hotels, directly provide full context and execute immediately
+    if any(word in msg_lower for word in ["hotel", "accommodation", "stay", "lodging", "show me hotels", "find hotels"]):
         if context.get("destination") and context.get("depart_date"):
             if context.get("return_date"):
-                enhanced_message = f"Find hotels in {context['destination']} from {context['depart_date']} to {context['return_date']}"
+                enhanced_message = f"Find hotels in {context['destination']} from {context['depart_date']} to {context['return_date']}. Execute immediately without asking questions."
             else:
-                enhanced_message = f"Find hotels in {context['destination']} from {context['depart_date']}"
+                enhanced_message = f"Find hotels in {context['destination']} from {context['depart_date']}. Execute immediately without asking questions."
     
-    # If user asks for travel plan, directly provide full context
-    if any(word in msg_lower for word in ["travel plan", "plan", "places to visit", "things to do", "activities", "show me travel plan"]):
+    # If user asks for travel plan, directly provide full context and execute immediately
+    if any(word in msg_lower for word in ["travel plan", "plan", "places to visit", "things to do", "activities", "show me travel plan", "itinerary"]):
         if context.get("destination"):
             days = 3
             if context.get("depart_date") and context.get("return_date"):
@@ -178,16 +195,32 @@ async def chat(req: ChatRequest):
                         days = 3
                 except:
                     pass
-            enhanced_message = f"Create a {days}-day travel plan for {context['destination']} with places to visit and activities. Do not ask for additional information."
+            enhanced_message = f"Create a {days}-day travel plan for {context['destination']} with places to visit and activities. Execute immediately without asking for additional information."
+    
+    # Handle round trip updates - check if user is changing round trip status
+    if any(word in msg_lower for word in ["round trip", "roundtrip", "return", "one way", "one-way", "single"]):
+        if "round trip" in msg_lower or "roundtrip" in msg_lower or ("return" in msg_lower and "date" in msg_lower):
+            context["round_trip"] = True
+            if context.get("depart_date") and not context.get("return_date"):
+                enhanced_message = f"User wants a round trip. Find flights from {context.get('origin', '')} to {context.get('destination', '')} on {context.get('depart_date', '')}. Ask for return date if not provided."
+        elif "one way" in msg_lower or "one-way" in msg_lower or "single" in msg_lower:
+            context["round_trip"] = False
+            context["return_date"] = ""  # Clear return date for one-way
     
     # For flights - don't auto-assume dates, let the model ask if needed
-    # Only enhance if we have BOTH dates
-    if any(word in msg_lower for word in ["flight", "flights", "show me flights"]) and ("show" in msg_lower or "find" in msg_lower or "also" in msg_lower or "direct" in msg_lower):
-        if context.get("origin") and context.get("destination") and context.get("depart_date") and context.get("return_date"):
-            if "direct" in msg_lower or "nonstop" in msg_lower:
-                enhanced_message = f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}. Prefer nonstop flights."
-            else:
-                enhanced_message = f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}"
+    # Only enhance if we have BOTH dates for round trip, or just depart for one-way
+    if any(word in msg_lower for word in ["flight", "flights", "show me flights", "update flights", "refresh flights"]) and ("show" in msg_lower or "find" in msg_lower or "also" in msg_lower or "direct" in msg_lower or "update" in msg_lower or "refresh" in msg_lower):
+        if context.get("origin") and context.get("destination") and context.get("depart_date"):
+            if context.get("round_trip") and context.get("return_date"):
+                if "direct" in msg_lower or "nonstop" in msg_lower:
+                    enhanced_message = f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}. Prefer nonstop flights."
+                else:
+                    enhanced_message = f"Find flights from {context['origin']} to {context['destination']} on {context['depart_date']} returning on {context['return_date']}"
+            elif not context.get("round_trip"):
+                if "direct" in msg_lower or "nonstop" in msg_lower:
+                    enhanced_message = f"Find one-way flights from {context['origin']} to {context['destination']} on {context['depart_date']}. Prefer nonstop flights."
+                else:
+                    enhanced_message = f"Find one-way flights from {context['origin']} to {context['destination']} on {context['depart_date']}"
     
     # Handle "also" requests - if user says "show me X and Y also", create combined request
     if "also" in msg_lower or "and" in msg_lower:
@@ -230,11 +263,33 @@ async def chat(req: ChatRequest):
     if enhanced_message != req.message:
         app_logger.info(f"Enhanced message: '{req.message}' -> '{enhanced_message}' (context: {context})")
 
-    # Add current date context to the message if it contains relative dates
+    # Add current date context to the message if it contains relative dates or year confirmations
     from datetime import datetime
     today = datetime.now()
     today_iso = today.strftime("%Y-%m-%d")
     today_str = today.strftime("%B %d, %Y")
+    
+    # Extract year from user message if mentioned (e.g., "yes its 2026", "2026", "year 2026")
+    year_match = re.search(r'\b(20\d{2})\b', req.message)
+    if year_match:
+        year = year_match.group(1)
+        enhanced_message = f"[User confirmed year: {year}] {enhanced_message}"
+        # Update context with year if we have dates
+        if context.get("depart_date") and not context["depart_date"].startswith(year):
+            # Update date with correct year
+            try:
+                old_date = datetime.strptime(context["depart_date"], "%Y-%m-%d")
+                new_date = old_date.replace(year=int(year))
+                context["depart_date"] = new_date.strftime("%Y-%m-%d")
+            except:
+                pass
+        if context.get("return_date") and not context["return_date"].startswith(year):
+            try:
+                old_date = datetime.strptime(context["return_date"], "%Y-%m-%d")
+                new_date = old_date.replace(year=int(year))
+                context["return_date"] = new_date.strftime("%Y-%m-%d")
+            except:
+                pass
     
     # Check if message contains relative date keywords
     relative_date_keywords = ['tomorrow', 'next week', 'next month', 'next year', 'today', 'yesterday']
@@ -325,12 +380,19 @@ async def chat(req: ChatRequest):
                 else:
                     flights = []
                     route = None
-                    # Update context
+                    # Update context - always update round_trip status
                     context["origin"] = args.get('departure_city', context.get("origin", ""))
                     context["destination"] = args.get('arrival_city', context.get("destination", ""))
                     context["depart_date"] = args.get('outbound_date', context.get("depart_date", ""))
-                    context["return_date"] = args.get('return_date', context.get("return_date", ""))
-                    context["round_trip"] = args.get('return_date') is not None
+                    return_date_arg = args.get('return_date')
+                    if return_date_arg:
+                        context["return_date"] = return_date_arg
+                        context["round_trip"] = True
+                    else:
+                        # Only clear return_date if explicitly one-way
+                        if context.get("round_trip") is False:
+                            context["return_date"] = ""
+                        context["round_trip"] = False
                     
                     # Get structured flights for UI first
                     try:
@@ -360,11 +422,12 @@ async def chat(req: ChatRequest):
                     
                     structured: Optional[Dict[str, Any]] = {"flights": flights, "route": route}
                     
-                    # Use the result text from find_flights, which has the flight summary
-                    if result and not out_text:
-                        out_text = result
-                    elif result and out_text:
-                        out_text += "\n\n" + result
+                    # Don't add the flight summary text if we have structured flights - the table will show them
+                    # Only add a brief message if there's no other text from the AI
+                    if not out_text and flights:
+                        out_text = "Great! I found flight options for you. ✈️"
+                    elif not out_text and not flights:
+                        out_text = "I couldn't find any flights matching your criteria. Please try different dates or cities."
             elif fn == 'find_hotels':
                 # Update context
                 location = args.get('location', '')

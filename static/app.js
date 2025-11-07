@@ -29,15 +29,34 @@
   let planeTimer;
   const sessionId = (() => Math.random().toString(36).slice(2))();
   
-  // Initialize map
+  // Initialize map with faster static image approach
   function initMap() {
-    if (!map) {
-      map = L.map('map');
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors'
-      }).addTo(map);
-      map.setView([20.0, 78.0], 4);
+    if (!map && document.getElementById('map')) {
+      try {
+        // Use Leaflet with a faster tile server
+        map = L.map('map', {
+          preferCanvas: true,
+          zoomControl: true,
+          loadingControl: true
+        });
+        // Use CartoDB Positron tiles - faster and lighter
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          subdomains: 'abcd',
+          maxZoom: 19
+        }).addTo(map);
+        map.setView([20.0, 78.0], 4);
+        map.whenReady(() => {
+          console.log('Map initialized successfully');
+        });
+      } catch (e) {
+        console.error('Error initializing map:', e);
+        // Fallback: show a static map image
+        const mapEl = document.getElementById('map');
+        if (mapEl) {
+          mapEl.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f0f0f0;color:#666;"><p>Map loading...</p></div>';
+        }
+      }
     }
   }
   
@@ -98,17 +117,66 @@
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold **text**
       .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic *text* (but not **)
       .replace(/`(.*?)`/g, '<code style="background: rgba(0,0,0,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace;">$1</code>') // Code `text`
+      .replace(/•\s/g, '• ') // Bullet points
       .replace(/\n/g, '<br>'); // Line breaks
     
     return html;
   }
   
+  // Render flight table in chat message
+  function renderFlightTable(flights) {
+    if (!flights || flights.length === 0) return '';
+    
+    let tableHTML = '<div class="flight-table-wrapper"><table class="flight-table"><thead><tr><th>Airline</th><th>Departure</th><th>Arrival</th><th>Duration</th><th>Stops</th><th>Price</th></tr></thead><tbody>';
+    
+    flights.slice(0, 5).forEach(flight => {
+      const depParsed = parseTime(flight.departure_time || '');
+      const arrParsed = parseTime(flight.arrival_time || '');
+      const logoHTML = flight.airline_logo 
+        ? `<img src="${flight.airline_logo}" alt="${flight.airline || ''}" class="airline-logo-small" onerror="this.style.display='none'">`
+        : '';
+      
+      tableHTML += `
+        <tr>
+          <td>
+            <div class="airline-cell">
+              ${logoHTML}
+              <span>${flight.airline || 'N/A'}</span>
+            </div>
+          </td>
+          <td>${depParsed.code || 'N/A'}<br><small>${depParsed.time || ''}</small></td>
+          <td>${arrParsed.code || 'N/A'}<br><small>${arrParsed.time || ''}</small></td>
+          <td>${flight.duration || 'N/A'}</td>
+          <td>${flight.stops || 'N/A'}</td>
+          <td><strong>${flight.price || 'N/A'}</strong></td>
+        </tr>
+      `;
+    });
+    
+    tableHTML += '</tbody></table></div>';
+    return tableHTML;
+  }
+  
+  function parseTime(timeStr) {
+    if (!timeStr) return { code: 'N/A', time: '' };
+    const parts = timeStr.split(' ');
+    if (parts.length >= 2) {
+      return { code: parts[0], time: parts.slice(1).join(' ') };
+    }
+    return { code: timeStr, time: '' };
+  }
+  
   // Add message with animation
-  function addMsg(text, who) {
+  function addMsg(text, who, flights = null) {
     const div = document.createElement('div');
     div.className = `msg ${who}`;
     if (who === 'bot') {
-      div.innerHTML = formatMessage(text);
+      let content = formatMessage(text);
+      // Add flight table if flights are provided
+      if (flights && Array.isArray(flights) && flights.length > 0) {
+        content += renderFlightTable(flights);
+      }
+      div.innerHTML = content;
     } else {
       div.textContent = text; // User messages stay as plain text
     }
@@ -130,6 +198,31 @@
   function hideLoading() {
     const loading = document.getElementById('loadingMsg');
     if (loading) loading.remove();
+  }
+  
+  // Voice output (text-to-speech) for bot messages
+  function speakText(text) {
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      speechSynthesis.speak(utterance);
+    }
+  }
+  
+  // Check if voice output is enabled
+  let voiceOutputEnabled = localStorage.getItem('voiceOutput') !== 'false';
+  
+  // Helper to add message with optional voice output
+  function addMsgWithVoice(text, who, flights = null) {
+    addMsg(text, who, flights);
+    if (who === 'bot' && voiceOutputEnabled && 'speechSynthesis' in window) {
+      // Only speak short messages (not long flight tables)
+      if (text && text.length < 200 && !flights) {
+        setTimeout(() => speakText(text), 500);
+      }
+    }
   }
   
   // Hotel card - improved design
@@ -409,6 +502,15 @@
     Object.assign(context, extracted);
     context.lastQuery = message;
     
+    // Handle round trip updates
+    const msgLower = message.toLowerCase();
+    if (msgLower.includes('round trip') || msgLower.includes('roundtrip') || (msgLower.includes('return') && msgLower.includes('date'))) {
+      context.roundTrip = true;
+    } else if (msgLower.includes('one way') || msgLower.includes('one-way') || msgLower.includes('single')) {
+      context.roundTrip = false;
+      context.returnDate = '';
+    }
+    
     try {
       const body = { session_id: sessionId, message: message };
       const r = await fetch(`/chat`, { 
@@ -423,6 +525,7 @@
       console.log('Response:', j);
       
       // Show bot response text - always show unless it's a clear duplicate question
+      let flightsForChat = [];
       if (j) {
         if (j.text) {
           const text = j.text.trim();
@@ -436,12 +539,74 @@
             );
             
             if (!isDuplicateQuestion) {
-              addMsg(text, 'bot');
+              // Check if we have flights to display in chat
+              (j.tool_results || []).forEach(tr => {
+                if (tr.flights && Array.isArray(tr.flights)) {
+                  flightsForChat = tr.flights;
+                }
+              });
+              
+              // Filter out flight summary text if we have structured flights
+              let filteredText = text;
+              if (flightsForChat.length > 0) {
+                // Remove flight summary patterns (numbered lists, "--- Flights ---" headers, etc.)
+                // Split by lines and filter out flight list lines
+                const lines = filteredText.split('\n');
+                let foundFlightList = false;
+                const filteredLines = lines.filter(line => {
+                  const trimmed = line.trim();
+                  
+                  // If we've already found the flight list, skip everything after
+                  if (foundFlightList) return false;
+                  
+                  // Check if this line starts a flight list
+                  if (/^---\s*Flights?\s*\(.*?\)\s*---/i.test(trimmed)) {
+                    foundFlightList = true;
+                    return false;
+                  }
+                  if (/^Here are (some|the) (direct )?flight options? for you:?/i.test(trimmed)) {
+                    foundFlightList = true;
+                    return false;
+                  }
+                  if (/^\d+\.\s*[A-Za-z\s]+\s*\|.*?(dep|Departs|arr|Arrives)/i.test(trimmed)) {
+                    foundFlightList = true;
+                    return false;
+                  }
+                  if (/^\d+\.\s*[A-Za-z\s]+\s*\|\s*Flight\s+\d+/i.test(trimmed)) {
+                    foundFlightList = true;
+                    return false;
+                  }
+                  if (/Do any of these flights work for you/i.test(trimmed)) {
+                    foundFlightList = true;
+                    return false;
+                  }
+                  
+                  return true;
+                });
+                
+                filteredText = filteredLines.join('\n').trim();
+                
+                // If text is now empty or just whitespace, use a default message
+                if (!filteredText || filteredText.length < 10) {
+                  filteredText = "Great! I found flight options for you. ✈️";
+                }
+              }
+              
+              addMsgWithVoice(filteredText, 'bot', flightsForChat.length > 0 ? flightsForChat : null);
             }
           }
         } else if (j.tool_results && j.tool_results.length > 0) {
           // If we have tool results but no text, show a simple message
-          addMsg('Searching for flights...', 'bot');
+          (j.tool_results || []).forEach(tr => {
+            if (tr.flights && Array.isArray(tr.flights)) {
+              flightsForChat = tr.flights;
+            }
+          });
+          if (flightsForChat.length > 0) {
+            addMsgWithVoice('Great! I found flight options for you. ✈️', 'bot', flightsForChat);
+          } else {
+            addMsgWithVoice('Searching...', 'bot', null);
+          }
         }
       }
       
@@ -458,9 +623,9 @@
       
       // Detect what the user requested from the message
       const msgLower = message.toLowerCase();
-      hasHotelRequest = /hotel|accommodation|stay|lodging/.test(msgLower);
+      hasHotelRequest = /hotel|accommodation|stay|lodging|find hotels|show hotels|search hotels/.test(msgLower);
       hasPlanRequest = /travel plan|plan|places to visit|things to do|activities|itinerary/.test(msgLower);
-      hasFlightRequest = /flight|flights/.test(msgLower);
+      hasFlightRequest = /flight|flights|find flights|show flights|search flights/.test(msgLower);
       hasSearchRequest = /restaurant|restaurants|cafe|cafes|best|find|search|where|what|which/.test(msgLower);
       
       (j.tool_results || []).forEach(tr => {
@@ -508,19 +673,20 @@
       
       // Determine which tab to switch to based on user request priority
       let tabToSwitch = null;
+      // Priority: explicit requests first, then by data availability
       if (hasSearchRequest && (searchResults.length > 0 || hasSearchRequest)) {
         tabToSwitch = 'search';
+      } else if (hasHotelRequest && hotels.length > 0) {
+        tabToSwitch = 'hotels';  // Explicit hotel request - switch to hotels tab
       } else if (hasPlanRequest && travelPlanText) {
         tabToSwitch = 'plan';
-      } else if (hasHotelRequest && hotels.length) {
-        tabToSwitch = 'hotels';
-      } else if (hasFlightRequest && flights.length) {
+      } else if (hasFlightRequest && flights.length > 0) {
         tabToSwitch = 'flights';
+      } else if (hotels.length > 0 && !flights.length) {
+        tabToSwitch = 'hotels';  // If we have hotels and no flights, show hotels
       } else if (travelPlanText && !flights.length && !hotels.length) {
         tabToSwitch = 'plan';
-      } else if (hotels.length && !flights.length) {
-        tabToSwitch = 'hotels';
-      } else if (flights.length) {
+      } else if (flights.length > 0) {
         tabToSwitch = 'flights';
       }
       
@@ -531,6 +697,10 @@
       if (hotels.length) {
         hotelsEl.innerHTML = '';
         hotels.forEach((h, i) => hotelsEl.appendChild(hotelCard(h, i)));
+        // If we have hotels and user asked for hotels, ensure we switch to hotels tab
+        if (hasHotelRequest && !tabToSwitch) {
+          tabToSwitch = 'hotels';
+        }
       }
       if (route) {
         renderRoute(route);
@@ -646,37 +816,11 @@
         }
       }
       
-      // Auto-trigger hotels and travel plan if we just got flights and have destination/dates
-      if (flights.length > 0 && context.destination && context.departDate) {
-        // Check if we need to search for hotels
-        if (hotels.length === 0) {
-          setTimeout(async () => {
-            const hotelQuery = `Find hotels in ${context.destination} from ${context.departDate}${context.returnDate ? ` to ${context.returnDate}` : ''}`;
-            await sendChatMessage(hotelQuery);
-          }, 1500);
-        }
-        
-        // Check if we need to generate travel plan
-        if (!travelPlanText) {
-          setTimeout(async () => {
-            let days = 3;
-            if (context.returnDate && context.departDate) {
-              try {
-                const dep = new Date(context.departDate);
-                const ret = new Date(context.returnDate);
-                days = Math.ceil((ret - dep) / (1000 * 60 * 60 * 24));
-                if (days < 1) days = 3;
-              } catch (e) {}
-            }
-            const planQuery = `Create a travel plan for ${context.destination} for ${days} days`;
-            await sendChatMessage(planQuery);
-          }, 3000);
-        }
-      }
+      // Removed auto-trigger - only search when user explicitly asks
     } catch (e) {
       hideLoading();
       console.error('Error in sendChatMessage:', e);
-      addMsg('Sorry, I encountered an error. Please try again.', 'bot');
+      addMsgWithVoice('Sorry, I encountered an error. Please try again.', 'bot');
     }
   }
   
@@ -816,6 +960,95 @@
   const savedWidth = localStorage.getItem('leftPanelWidth');
   if (savedWidth) {
     leftPanel.style.width = savedWidth;
+  }
+  
+  // Dark mode toggle
+  const darkModeToggle = document.getElementById('darkModeToggle');
+  const isDarkMode = localStorage.getItem('darkMode') === 'true';
+  if (isDarkMode) {
+    document.body.classList.add('dark-mode');
+    darkModeToggle.textContent = '☀️';
+  }
+  
+  darkModeToggle.addEventListener('click', () => {
+    document.body.classList.toggle('dark-mode');
+    const isDark = document.body.classList.contains('dark-mode');
+    localStorage.setItem('darkMode', isDark);
+    darkModeToggle.textContent = isDark ? '☀️' : '🌙';
+  });
+  
+  // Voice input functionality
+  const voiceBtn = document.getElementById('voiceBtn');
+  let recognition = null;
+  let isRecording = false;
+  
+  // Check if browser supports speech recognition
+  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+    
+    recognition.onstart = () => {
+      isRecording = true;
+      voiceBtn.classList.add('recording');
+      voiceBtn.title = 'Listening...';
+    };
+    
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      chatInputEl.value = transcript;
+      sendChatMessage(transcript);
+    };
+    
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      isRecording = false;
+      voiceBtn.classList.remove('recording');
+      voiceBtn.title = 'Voice input';
+      if (event.error === 'no-speech') {
+        addMsgWithVoice('No speech detected. Please try again.', 'bot');
+      }
+    };
+    
+    recognition.onend = () => {
+      isRecording = false;
+      voiceBtn.classList.remove('recording');
+      voiceBtn.title = 'Voice input';
+    };
+    
+    voiceBtn.addEventListener('click', () => {
+      if (isRecording) {
+        recognition.stop();
+      } else {
+        try {
+          recognition.start();
+        } catch (e) {
+          console.error('Error starting recognition:', e);
+          addMsgWithVoice('Voice input is not available. Please use text input.', 'bot');
+        }
+      }
+    });
+  } else {
+    // Hide voice button if not supported
+    voiceBtn.style.display = 'none';
+  }
+  
+  // Ensure map initializes when container is visible (mapContainer already declared above)
+  const mapObserver = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+        const mapContainerEl = document.getElementById('mapContainer');
+        if (mapContainerEl && mapContainerEl.style.display !== 'none' && !map) {
+          setTimeout(() => initMap(), 100);
+        }
+      }
+    });
+  });
+  const mapContainerEl = document.getElementById('mapContainer');
+  if (mapContainerEl) {
+    mapObserver.observe(mapContainerEl, { attributes: true, attributeFilter: ['style'] });
   }
   
   // Initialize
