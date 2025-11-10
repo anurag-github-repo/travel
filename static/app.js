@@ -453,12 +453,25 @@
     // Price section
     const priceDiv = document.createElement('div');
     priceDiv.className = 'flight-price';
+    
+    // Build booking links array
+    const bookingLinks = [];
+    if (f.booking_link) bookingLinks.push({ name: 'Google', url: f.booking_link });
+    if (f.kayak_link) bookingLinks.push({ name: 'Kayak', url: f.kayak_link });
+    if (f.skyscanner_link) bookingLinks.push({ name: 'Skyscanner', url: f.skyscanner_link });
+    if (f.expedia_link) bookingLinks.push({ name: 'Expedia', url: f.expedia_link });
+    if (f.booking_com_link) bookingLinks.push({ name: 'Booking.com', url: f.booking_com_link });
+    if (f.momondo_link) bookingLinks.push({ name: 'Momondo', url: f.momondo_link });
+    
+    const linksHTML = bookingLinks.map(link => 
+      `<a href="${link.url}" target="_blank" class="flight-action-link" title="${link.name}">${link.name}</a>`
+    ).join('');
+    
     priceDiv.innerHTML = `
       <div class="flight-price-amount">${f.price || 'N/A'}</div>
       <div class="flight-price-airline">${f.airline || ''}</div>
-      <div class="flight-actions">
-        ${f.booking_link ? `<a href="${f.booking_link}" target="_blank" class="flight-action-link">Book</a>` : ''}
-        ${f.kayak_link ? `<a href="${f.kayak_link}" target="_blank" class="flight-action-link">Kayak</a>` : ''}
+      <div class="flight-actions" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+        ${linksHTML}
       </div>
     `;
     
@@ -832,6 +845,7 @@
       const searchResults = [];
       let route = null;
       let travelPlanText = '';
+      let travelPlanImages = {};
       let hasHotelRequest = false;
       let hasPlanRequest = false;
       let hasFlightRequest = false;
@@ -850,6 +864,9 @@
         if (tr.route && !route) route = tr.route;
         if (tr.name === 'generate_travel_plan' && tr.travel_plan) {
           travelPlanText = tr.travel_plan;
+          if (tr.travel_plan_images) {
+            travelPlanImages = tr.travel_plan_images;
+          }
         }
         if (tr.name === 'search_web' && tr.search_results) {
           // Use structured search results if available
@@ -931,7 +948,7 @@
       if (travelPlanText) {
         const planEl = document.getElementById('itinerary');
         if (planEl) {
-          // Better formatting for travel plan
+          // Better formatting for travel plan with images
           let formatted = travelPlanText
             .replace(/\n\n+/g, '\n\n') // Normalize multiple newlines
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
@@ -940,7 +957,28 @@
             .replace(/## (.*?)(\n|$)/g, '<h2 style="color: #10b981; margin-top: 28px; margin-bottom: 16px; font-size: 20px;">$1</h2>') // H2
             .replace(/# (.*?)(\n|$)/g, '<h1 style="color: #10b981; margin-top: 32px; margin-bottom: 20px; font-size: 24px;">$1</h1>') // H1
             .replace(/\n/g, '<br>'); // Line breaks
-          planEl.innerHTML = formatted;
+          
+          // Add images if available
+          let imagesHTML = '';
+          if (Object.keys(travelPlanImages).length > 0) {
+            imagesHTML = '<div style="margin-bottom: 24px; display: flex; flex-wrap: wrap; gap: 12px;">';
+            for (const [place, imageUrl] of Object.entries(travelPlanImages)) {
+              if (imageUrl) {
+                imagesHTML += `
+                  <div style="flex: 1; min-width: 200px; max-width: 300px;">
+                    <img src="${imageUrl}" alt="${place}" 
+                         style="width: 100%; height: 200px; object-fit: cover; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"
+                         onerror="this.style.display='none'"
+                         loading="lazy">
+                    <p style="margin-top: 8px; font-size: 14px; color: #666; text-align: center;">${place}</p>
+                  </div>
+                `;
+              }
+            }
+            imagesHTML += '</div>';
+          }
+          
+          planEl.innerHTML = imagesHTML + formatted;
         }
       }
       

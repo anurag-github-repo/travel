@@ -261,7 +261,7 @@ async def search_google_flights(
     if 'flights' in res and not res.get('best_flights'):
         logger.info("Found 'flights' key instead of 'best_flights'")
 
-    def _make_booking_link(dep: str, arr: str, out_d: str, ret_d: Optional[str]) -> str:
+    def _make_google_flights_link(dep: str, arr: str, out_d: str, ret_d: Optional[str]) -> str:
         try:
             if ret_d:
                 return (
@@ -291,6 +291,27 @@ async def search_google_flights(
             return f"{base}/{dep}/{arr}/{out_c}/{ret_c}/?adults=1&cabinclass=economy"
         return f"{base}/{dep}/{arr}/{out_c}/?adults=1&cabinclass=economy"
 
+    def _make_expedia_link(dep: str, arr: str, out_d: str, ret_d: Optional[str]) -> str:
+        # Expedia uses YYYY-MM-DD format
+        base = "https://www.expedia.com/Flights-Search"
+        if ret_d:
+            return f"{base}?flight-type=on&mode=search&trip=roundtrip&leg1=from:{dep},to:{arr},departure:{out_d}TANYT&leg2=from:{arr},to:{dep},departure:{ret_d}TANYT&options=cabinclass:economy"
+        return f"{base}?flight-type=on&mode=search&trip=oneway&leg1=from:{dep},to:{arr},departure:{out_d}TANYT&options=cabinclass:economy"
+
+    def _make_booking_com_link(dep: str, arr: str, out_d: str, ret_d: Optional[str]) -> str:
+        # Booking.com flights
+        base = "https://www.booking.com/flights"
+        if ret_d:
+            return f"{base}/index.html?ss={dep}%2C{arr}&checkin_month={out_d[:7]}&checkin_monthday={out_d[8:10]}&checkout_month={ret_d[:7]}&checkout_monthday={ret_d[8:10]}"
+        return f"{base}/index.html?ss={dep}%2C{arr}&checkin_month={out_d[:7]}&checkin_monthday={out_d[8:10]}"
+
+    def _make_momondo_link(dep: str, arr: str, out_d: str, ret_d: Optional[str]) -> str:
+        # Momondo flights
+        base = "https://www.momondo.com/flight-search"
+        if ret_d:
+            return f"{base}/{dep}-{arr}/{out_d}/{ret_d}"
+        return f"{base}/{dep}-{arr}/{out_d}"
+
     flights_out: List[Dict[str, Any]] = []
 
     def _append_from_collection(collection):
@@ -305,9 +326,12 @@ async def search_google_flights(
                 arrival_time = first_leg.get("arrival_airport", {}).get("time", "N/A")
                 travel_class = first_leg.get("travel_class", "Economy")
                 airline_logo = first_leg.get("airline_logo", "")
-                booking_link = _make_booking_link(departure_id, arrival_id, outbound_date, return_date)
+                booking_link = _make_google_flights_link(departure_id, arrival_id, outbound_date, return_date)
                 kayak_link = _make_kayak_link(departure_id, arrival_id, outbound_date, return_date)
                 skyscanner_link = _make_skyscanner_link(departure_id, arrival_id, outbound_date, return_date)
+                expedia_link = _make_expedia_link(departure_id, arrival_id, outbound_date, return_date)
+                booking_com_link = _make_booking_com_link(departure_id, arrival_id, outbound_date, return_date)
+                momondo_link = _make_momondo_link(departure_id, arrival_id, outbound_date, return_date)
 
                 flights_out.append({
                     "airline": airline,
@@ -321,6 +345,9 @@ async def search_google_flights(
                     "booking_link": booking_link,
                     "kayak_link": kayak_link,
                     "skyscanner_link": skyscanner_link,
+                    "expedia_link": expedia_link,
+                    "booking_com_link": booking_com_link,
+                    "momondo_link": momondo_link,
                 })
             except Exception as e:
                 logger.warning("Skipping malformed flight entry: %s", e)
@@ -514,6 +541,47 @@ async def search_google(
 
 travel_plan = {}  # Structured travel plan: {destination: {places: [], activities: [], days: []}}
 
+async def find_chartered_flights(
+    departure_city: str,
+    arrival_city: str,
+    outbound_date: str,
+    return_date: Optional[str] = None,
+    passengers: int = 1,
+    currency: str = "INR",
+) -> str:
+    """
+    Searches for chartered/private flight options between two cities.
+    
+    Parameters:
+    - departure_city: City name or IATA code for departure
+    - arrival_city: City name or IATA code for arrival
+    - outbound_date: Departure date in YYYY-MM-DD format
+    - return_date: Return date in YYYY-MM-DD format (optional)
+    - passengers: Number of passengers (default: 1)
+    - currency: Currency code (default: INR)
+    """
+    try:
+        # Search for chartered flight providers
+        query = f"chartered flights private jets {departure_city} to {arrival_city}"
+        results = await search_google(query, location=f"{departure_city}, India", num=10)
+        
+        if not results:
+            return f"I couldn't find chartered flight options from {departure_city} to {arrival_city}. You may want to contact private jet charter companies directly."
+        
+        summary = f"Chartered/Private Flight Options from {departure_city} to {arrival_city}:\n\n"
+        for i, result in enumerate(results[:5], 1):
+            summary += f"{i}. {result.get('title', 'N/A')}\n"
+            summary += f"   {result.get('snippet', '')}\n"
+            summary += f"   {result.get('link', '')}\n\n"
+        
+        summary += "\nNote: Chartered flights typically require direct contact with providers for pricing and availability. "
+        summary += "Prices vary significantly based on aircraft type, distance, and services included."
+        
+        return summary
+    except Exception as e:
+        logger.warning("Failed to search chartered flights: %s", e)
+        return f"I encountered an error searching for chartered flights. Please try contacting private jet charter companies directly."
+
 async def find_flights(
     departure_city: str,
     arrival_city: str,
@@ -628,12 +696,38 @@ async def search_web(query: str, location: Optional[str] = None, num: int = 10):
     results = await search_google(query, location=location, num=num)
     return summarize_for_ai("Search Results", results)
 
+async def search_images(query: str, num: int = 5) -> List[Dict[str, Any]]:
+    """Searches for images using Google Images via SerpAPI."""
+    params = {
+        "api_key": SERP_API_KEY,
+        "engine": "google",
+        "q": query,
+        "tbm": "isch",  # Image search
+        "num": num,
+        "hl": "en",
+        "gl": "in",
+    }
+    
+    try:
+        res = await _run_search_sync(params)
+        images = []
+        for img in res.get("images_results", [])[:num]:
+            images.append({
+                "url": img.get("original") or img.get("link", ""),
+                "thumbnail": img.get("thumbnail", ""),
+                "title": img.get("title", query),
+            })
+        return images
+    except Exception as e:
+        logger.warning("Failed to search images for %s: %s", query, e)
+        return []
+
 async def generate_travel_plan(destination: str, duration_days: int = 3, interests: Optional[str] = None):
     """Generates a travel plan with places to visit and activities for a destination."""
     prompt = f"Create a {duration_days}-day travel plan for {destination}. "
     if interests:
         prompt += f"Focus on: {interests}. "
-    prompt += "Include: 1) Top places to visit (with brief descriptions), 2) Activities/things to do, 3) Day-by-day itinerary. Format as a structured plan."
+    prompt += "Include: 1) Top places to visit (with brief descriptions), 2) Activities/things to do, 3) Day-by-day itinerary. Format as a structured plan. For each major place or attraction mentioned, list it clearly with its name."
     
     try:
         GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "AIzaSyA2C2-YB43Mra_cleDmrblCJ-JSzd2cPfk")
@@ -642,17 +736,49 @@ async def generate_travel_plan(destination: str, duration_days: int = 3, interes
         response = model.generate_content(prompt)
         plan_text = response.text if hasattr(response, 'text') else str(response)
         
-        # Store structured plan
+        # Extract place names from the plan and fetch images
+        # Look for common patterns like "Day 1:", "Visit", "Explore", etc.
+        import re
+        place_patterns = [
+            r'(?:Visit|Explore|See|Go to|Check out)\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|$)',
+            r'###\s+(.+?)(?:\n|$)',
+            r'##\s+(.+?)(?:\n|$)',
+            r'\*\*([A-Z][a-zA-Z\s]+?)\*\*',
+        ]
+        
+        places = []
+        for pattern in place_patterns:
+            matches = re.findall(pattern, plan_text)
+            places.extend([m.strip() for m in matches if len(m.strip()) > 3 and len(m.strip()) < 50])
+        
+        # Remove duplicates and limit to top 10
+        places = list(dict.fromkeys(places))[:10]
+        
+        # Fetch images for destination and top places
+        images = {}
+        destination_images = await search_images(f"{destination} travel destination", 3)
+        if destination_images:
+            images[destination] = destination_images[0].get("url", "")
+        
+        # Fetch images for top places
+        for place in places[:5]:  # Limit to 5 places to avoid too many API calls
+            place_images = await search_images(f"{place} {destination}", 1)
+            if place_images:
+                images[place] = place_images[0].get("url", "")
+        
+        # Store structured plan with images
         travel_plan[destination.lower()] = {
             "destination": destination,
             "duration_days": duration_days,
             "interests": interests,
             "plan_text": plan_text,
-            "places": [],
+            "places": places,
             "activities": [],
-            "days": []
+            "days": [],
+            "images": images
         }
         
+        # Return plan text with image metadata (will be sent separately in structured response)
         return plan_text
     except Exception as e:
         logger.warning("Failed to generate travel plan: %s", e)

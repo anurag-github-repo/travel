@@ -14,6 +14,7 @@ from travel_chatbot import logger as app_logger
 
 from travel_chatbot import (
     find_flights,
+    find_chartered_flights,
     find_hotels,
     generate_travel_plan,
     search_web,
@@ -79,6 +80,10 @@ Next up, could you please tell me:
 User: "Two Adults"
 You: "Perfect! So, it's a trip for Two Adults from Mumbai to Singapore from December 10th to December 15th. Got it! 👯
 
+Now, I'd like to know about your flight preferences:
+• ✈️ What class of flight would you prefer? (Economy, Business, or First Class)
+• 🛩️ Are you looking for regular commercial flights, or would you like to explore chartered/private flight options?
+
 To help me find the best options for you, could you please share your estimated budget for the entire trip (excluding flights, as we'll look at those separately)?
 • 💰 What is your budget in ₹ (Indian Rupees)? (e.g., "₹80,000" or "around 1.5 Lakhs")"
 
@@ -100,13 +105,15 @@ CRITICAL RULES:
 15. Be proactive but not pushy - only search for what the user explicitly requests
 16. IDENTITY: When asked about who you are, say "I am Naveo AI agent" or "I'm Naveo AI agent" - never say you are a generic travel assistant
 17. NATURAL CONVERSATION: Respond naturally to casual greetings and questions. Don't repeat the same response every time - vary your responses while staying friendly and helpful
-18. CONTEXT AWARENESS: Remember previous messages in the conversation and respond appropriately 
+18. CONTEXT AWARENESS: Remember previous messages in the conversation and respond appropriately
+19. FLIGHT CLASS: When users ask for flights, ask about their preferred flight class (Economy, Business, or First Class) if not already mentioned. Use travel_class parameter: 1=Economy, 2=Premium Economy, 3=Business, 4=First Class
+20. CHARTERED FLIGHTS: If users ask about chartered flights, private jets, or private flights, use the find_chartered_flights function instead of find_flights 
 
 Always be conversational, helpful, confirm details, extract information naturally, and remember context!"""
 
 _model = genai.GenerativeModel(
     model_name='gemini-2.5-flash-lite',
-    tools=[find_flights, find_hotels, generate_travel_plan, search_web],
+    tools=[find_flights, find_chartered_flights, find_hotels, generate_travel_plan, search_web],
     system_instruction=get_system_instruction()
 )
 
@@ -391,7 +398,11 @@ async def chat(req: ChatRequest):
                     context["destination"] = destination
                 
                 result = await generate_travel_plan(**args)
-                structured = {"travel_plan": result}
+                # Get images from stored travel plan
+                from travel_chatbot import travel_plan
+                plan_data = travel_plan.get(destination.lower(), {})
+                images = plan_data.get("images", {})
+                structured = {"travel_plan": result, "travel_plan_images": images}
             elif fn == 'search_web':
                 result = await search_web(**args)
                 # Get structured search results
