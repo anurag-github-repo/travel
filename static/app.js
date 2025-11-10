@@ -277,18 +277,92 @@
   }
   
   // Voice output (text-to-speech) for bot messages
+  let currentUtterance = null;
+  let voiceOutputBtn = null; // Will be set after DOM loads
+  
   function speakText(text) {
     if ('speechSynthesis' in window) {
+      // Stop any currently playing speech
+      if (speechSynthesis.speaking) {
+        speechSynthesis.cancel();
+      }
+      
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'en-US';
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
+      
+      utterance.onstart = () => {
+        if (voiceOutputBtn && voiceOutputEnabled) {
+          voiceOutputBtn.title = 'Voice output enabled - Click to stop';
+        }
+      };
+      
+      utterance.onend = () => {
+        currentUtterance = null;
+        if (voiceOutputBtn && voiceOutputEnabled) {
+          voiceOutputBtn.title = 'Voice output enabled (click to disable)';
+        }
+      };
+      
+      utterance.onerror = () => {
+        currentUtterance = null;
+        if (voiceOutputBtn && voiceOutputEnabled) {
+          voiceOutputBtn.title = 'Voice output enabled (click to disable)';
+        }
+      };
+      
+      currentUtterance = utterance;
       speechSynthesis.speak(utterance);
+    }
+  }
+  
+  function stopSpeaking() {
+    if ('speechSynthesis' in window && speechSynthesis.speaking) {
+      speechSynthesis.cancel();
+      currentUtterance = null;
+      if (voiceOutputBtn && voiceOutputEnabled) {
+        voiceOutputBtn.title = 'Voice output enabled (click to disable)';
+      }
     }
   }
   
   // Check if voice output is enabled
   let voiceOutputEnabled = localStorage.getItem('voiceOutput') !== 'false';
+  
+  // Voice output toggle button - initialize after DOM is ready
+  voiceOutputBtn = document.getElementById('voiceOutputBtn');
+  if (voiceOutputBtn) {
+    // Update button state based on current setting
+    if (voiceOutputEnabled) {
+      voiceOutputBtn.classList.add('active');
+      voiceOutputBtn.title = 'Voice output enabled (click to disable)';
+    } else {
+      voiceOutputBtn.classList.remove('active');
+      voiceOutputBtn.title = 'Voice output disabled (click to enable)';
+    }
+    
+    voiceOutputBtn.addEventListener('click', () => {
+      // If speech is currently playing, stop it first
+      if (speechSynthesis.speaking) {
+        stopSpeaking();
+        return; // Don't toggle if we're just stopping current speech
+      }
+      
+      voiceOutputEnabled = !voiceOutputEnabled;
+      localStorage.setItem('voiceOutput', voiceOutputEnabled ? 'true' : 'false');
+      
+      if (voiceOutputEnabled) {
+        voiceOutputBtn.classList.add('active');
+        voiceOutputBtn.title = 'Voice output enabled (click to disable)';
+      } else {
+        voiceOutputBtn.classList.remove('active');
+        voiceOutputBtn.title = 'Voice output disabled (click to enable)';
+        // Stop any currently playing speech when disabled
+        stopSpeaking();
+      }
+    });
+  }
   
   // Helper to add message with optional voice output
   function addMsgWithVoice(text, who, flights = null) {

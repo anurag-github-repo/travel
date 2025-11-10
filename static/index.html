@@ -217,6 +217,8 @@
     .voice-btn { width: 40px; height: 40px; border: none; background: transparent; color: #666; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s; }
     .voice-btn:hover { background: #f0f0f0; color: #10b981; }
     .voice-btn.recording { background: #fee; color: #e00; animation: pulse 1.5s infinite; }
+    .voice-btn.active { background: #e6f7f0; color: #10b981; }
+    .voice-btn.active:hover { background: #d1f2e6; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
     
     /* Flight table in chat */
@@ -415,6 +417,9 @@
           <div class="chat-input">
             <button id="voiceBtn" class="voice-btn" title="Voice input">
               <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <button id="voiceOutputBtn" class="voice-btn" title="Toggle voice output (speak aloud)">
+              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
             </button>
             <input type="text" id="chatInput" placeholder="Your trip details" />
             <button id="chatSendBtn">
