@@ -107,7 +107,7 @@ CRITICAL RULES:
 17. NATURAL CONVERSATION: Respond naturally to casual greetings and questions. Don't repeat the same response every time - vary your responses while staying friendly and helpful
 18. CONTEXT AWARENESS: Remember previous messages in the conversation and respond appropriately
 19. FLIGHT CLASS: When users ask for flights, ask about their preferred flight class (Economy, Business, or First Class) if not already mentioned. Use travel_class parameter: 1=Economy, 2=Premium Economy, 3=Business, 4=First Class
-20. CHARTERED FLIGHTS: If users ask about chartered flights, private jets, or private flights, use the find_chartered_flights function instead of find_flights 
+20. FLIGHT TYPE SELECTION: For regular commercial flights (which is the default), ALWAYS use the find_flights function. ONLY use find_chartered_flights when the user explicitly asks for "chartered flights", "private jets", "private flights", or similar private/chartered options. For normal flight searches like "flights from X to Y" or "direct flights from X to Y", use find_flights. 
 
 Always be conversational, helpful, confirm details, extract information naturally, and remember context!"""
 
@@ -412,8 +412,31 @@ async def chat(req: ChatRequest):
                 num = args.get('num', 10)
                 search_results = await search_google(query, location=location, num=num)
                 structured = {"search_results": search_results}
+            elif fn == 'find_chartered_flights':
+                # Update context
+                context["origin"] = args.get('departure_city', context.get("origin", ""))
+                context["destination"] = args.get('arrival_city', context.get("destination", ""))
+                context["depart_date"] = args.get('outbound_date', context.get("depart_date", ""))
+                return_date_arg = args.get('return_date')
+                if return_date_arg:
+                    context["return_date"] = return_date_arg
+                    context["round_trip"] = True
+                else:
+                    context["round_trip"] = False
+                
+                # Execute chartered flights search
+                try:
+                    result = await find_chartered_flights(**args)
+                except Exception as e:
+                    app_logger.error(f"Error calling find_chartered_flights with args {args}: {e}", exc_info=True)
+                    result = "I encountered an issue searching for chartered flight options. Please try again or contact private jet charter companies directly."
+                    structured = None
+                else:
+                    structured = None  # Chartered flights don't return structured data like regular flights
             else:
-                result = f"Unknown function: {fn}"
+                # Unknown function - provide user-friendly error without mentioning tools
+                app_logger.warning(f"Unknown function called: {fn}")
+                result = "I'm having trouble processing that request. Please try rephrasing your question or contact support if the issue persists."
                 structured = None
 
             tr = {"name": fn, "result": result, **({} if not structured else structured)}
