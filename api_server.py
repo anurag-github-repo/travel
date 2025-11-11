@@ -93,21 +93,22 @@ CRITICAL RULES:
 3. EXTRACT all details from the conversation naturally - dates, years, destinations, hotels, etc. Don't rely on hardcoded values
 4. When user provides dates, automatically infer if it's round trip (if return date is mentioned) or one-way
 5. For round-trip flights, you NEED both outbound_date and return_date. For one-way, only outbound_date is needed.
-6. Remember all information from conversation (origin, destination, dates, passengers, budget, round_trip status)
-7. When user says "show me hotels/travel plan" or explicitly asks for something, EXTRACT the necessary details (destination, dates, etc.) from the conversation context and execute immediately
-8. DO NOT automatically search for hotels or travel plans unless the user explicitly asks for them
-9. Present results in a friendly, organized way with emojis and clear formatting
-10. When users mention relative dates (tomorrow, next week, next month), convert them to actual dates using today's date ({today_iso})
-11. IMPORTANT: When you receive flight search results from the find_flights function, DO NOT repeat the flight list in your response. The flights will be displayed in a table format automatically. Instead, just acknowledge the search and provide a brief friendly summary like "Here are the flight options I found for you!" or "Great! I found several flight options." Do NOT list individual flights in numbered format or table format in your text response.
-12. When user provides a year confirmation like "yes its 2026", EXTRACT that year from their message and use it immediately without asking again
-13. For hotel searches, EXTRACT destination, check-in date, and check-out date from the conversation context - don't ask for them if they're already mentioned
-14. For travel plans, EXTRACT destination and calculate days from dates mentioned in conversation - don't use hardcoded defaults
-15. Be proactive but not pushy - only search for what the user explicitly requests
-16. IDENTITY: When asked about who you are, say "I am Naveo AI agent" or "I'm Naveo AI agent" - never say you are a generic travel assistant
-17. NATURAL CONVERSATION: Respond naturally to casual greetings and questions. Don't repeat the same response every time - vary your responses while staying friendly and helpful
-18. CONTEXT AWARENESS: Remember previous messages in the conversation and respond appropriately
-19. FLIGHT CLASS: When users ask for flights, ask about their preferred flight class (Economy, Business, or First Class) if not already mentioned. Use travel_class parameter: 1=Economy, 2=Premium Economy, 3=Business, 4=First Class
-20. FLIGHT TYPE SELECTION: For regular commercial flights (which is the default), ALWAYS use the find_flights function. ONLY use find_chartered_flights when the user explicitly asks for "chartered flights", "private jets", "private flights", or similar private/chartered options. For normal flight searches like "flights from X to Y" or "direct flights from X to Y", use find_flights. 
+6. CRITICAL: NEVER call find_flights without an outbound_date. If the user asks for flights but doesn't provide a date, you MUST ask them for the travel date first before calling the function. Example: "Great! I'd be happy to help you find flights from Mumbai to Hyderabad. When would you like to travel? Please provide the departure date (e.g., 'November 15' or 'next week')."
+7. Remember all information from conversation (origin, destination, dates, passengers, budget, round_trip status)
+8. When user says "show me hotels/travel plan" or explicitly asks for something, EXTRACT the necessary details (destination, dates, etc.) from the conversation context and execute immediately
+9. DO NOT automatically search for hotels or travel plans unless the user explicitly asks for them
+10. Present results in a friendly, organized way with emojis and clear formatting
+11. When users mention relative dates (tomorrow, next week, next month), convert them to actual dates using today's date ({today_iso})
+12. IMPORTANT: When you receive flight search results from the find_flights function, DO NOT repeat the flight list in your response. The flights will be displayed in a table format automatically. Instead, just acknowledge the search and provide a brief friendly summary like "Here are the flight options I found for you!" or "Great! I found several flight options." Do NOT list individual flights in numbered format or table format in your text response.
+13. When user provides a year confirmation like "yes its 2026", EXTRACT that year from their message and use it immediately without asking again
+14. For hotel searches, EXTRACT destination, check-in date, and check-out date from the conversation context - don't ask for them if they're already mentioned
+15. For travel plans, EXTRACT destination and calculate days from dates mentioned in conversation - don't use hardcoded defaults
+16. Be proactive but not pushy - only search for what the user explicitly requests
+17. IDENTITY: When asked about who you are, say "I am Naveo AI agent" or "I'm Naveo AI agent" - never say you are a generic travel assistant
+18. NATURAL CONVERSATION: Respond naturally to casual greetings and questions. Don't repeat the same response every time - vary your responses while staying friendly and helpful
+19. CONTEXT AWARENESS: Remember previous messages in the conversation and respond appropriately
+20. FLIGHT CLASS: When users ask for flights, ask about their preferred flight class (Economy, Business, or First Class) if not already mentioned. Use travel_class parameter: 1=Economy, 2=Premium Economy, 3=Business, 4=First Class
+21. FLIGHT TYPE SELECTION: For regular commercial flights (which is the default), ALWAYS use the find_flights function. ONLY use find_chartered_flights when the user explicitly asks for "chartered flights", "private jets", "private flights", or similar private/chartered options. For normal flight searches like "flights from X to Y" or "direct flights from X to Y", use find_flights. 
 
 Always be conversational, helpful, confirm details, extract information naturally, and remember context!"""
 
@@ -310,8 +311,17 @@ async def chat(req: ChatRequest):
             if fn == 'find_flights':
                 # Validate required arguments
                 if not args.get('departure_city') or not args.get('arrival_city') or not args.get('outbound_date'):
-                    result = "Missing required information: departure city, arrival city, and outbound date are required."
+                    missing = []
+                    if not args.get('departure_city'):
+                        missing.append("departure city")
+                    if not args.get('arrival_city'):
+                        missing.append("arrival city")
+                    if not args.get('outbound_date'):
+                        missing.append("travel date")
+                    result = f"To search for flights, I need the following information: {', '.join(missing)}. Please provide the missing details so I can help you find the best flight options."
                     structured = None
+                    # Log the validation failure
+                    app_logger.warning(f"find_flights validation failed: missing {missing}, args={args}")
                 else:
                     flights = []
                     route = None
@@ -332,10 +342,14 @@ async def chat(req: ChatRequest):
                     # Get structured flights for UI first
                     try:
                         from travel_chatbot import get_iata_for_city, search_google_flights, get_city_coords
+                        outbound_date = args.get('outbound_date')
+                        # Double-check that outbound_date is present and valid
+                        if not outbound_date:
+                            raise ValueError("outbound_date is required but was not provided")
                         dep = await get_iata_for_city(args.get('departure_city'))
                         arr = await get_iata_for_city(args.get('arrival_city'))
-                        app_logger.info(f"Searching flights: {dep} -> {arr} on {args.get('outbound_date')}")
-                        flights = await search_google_flights(dep, arr, args.get('outbound_date'), args.get('return_date'))
+                        app_logger.info(f"Searching flights: {dep} -> {arr} on {outbound_date}")
+                        flights = await search_google_flights(dep, arr, outbound_date, args.get('return_date'))
                         app_logger.info(f"Found {len(flights)} flights")
                         route = {
                             "from": {"city": args.get('departure_city'), **(get_city_coords(args.get('departure_city')) or {})},
@@ -476,14 +490,24 @@ async def chat(req: ChatRequest):
     if not out_text:
         summary_bits = []
         for tr in tool_results:
+            # Check if there's an error message in the result
+            if tr.get('result') and isinstance(tr.get('result'), str):
+                result_text = tr.get('result', '')
+                # If it's an error message about missing info, use it
+                if 'missing' in result_text.lower() or 'need' in result_text.lower() or 'required' in result_text.lower():
+                    out_text = result_text
+                    break
             if tr.get('flights') is not None:
                 summary_bits.append(f"Flights found: {len(tr.get('flights') or [])}")
             if tr.get('hotels') is not None:
                 summary_bits.append(f"Hotels found: {len(tr.get('hotels') or [])}")
             if tr.get('travel_plan'):
                 summary_bits.append("Travel plan created")
-        if summary_bits:
+        if not out_text and summary_bits:
             out_text = "; ".join(summary_bits)
+        # Final fallback - if still no text, provide a generic helpful message
+        if not out_text:
+            out_text = "I'm here to help you with your travel plans! Could you please provide more details about what you're looking for?"
 
     return ChatResponse(text=out_text, tool_calls=tool_calls, tool_results=tool_results)
 
