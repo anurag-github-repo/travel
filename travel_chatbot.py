@@ -34,7 +34,7 @@ if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
     stream_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s - %(message)s'))
     logger.addHandler(stream_handler)
 
-SERP_API_KEY = "0c05012f41e43d4f77923b240810779b7251f4b12b3fcc08368d79c195bbc5a5"
+SERP_API_KEY = "e230bec76d1cd5ccedf36f0886ce177bbc3ec5bd8215a7376b7dd28acfe7032d"
 
 async def _run_search_sync(params: Dict[str, Any]) -> Dict[str, Any]:
     def _call():
