@@ -2,14 +2,16 @@ import os
 import asyncio
 import re
 from typing import Dict, Any, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 import google.generativeai as genai
+import requests
 from travel_chatbot import logger as app_logger
 
 from travel_chatbot import (
@@ -18,6 +20,7 @@ from travel_chatbot import (
     find_hotels,
     generate_travel_plan,
     search_web,
+    find_private_jets
 )
 
 # Initialize Gemini model (reuse same model as CLI but here as API singleton)
@@ -109,18 +112,29 @@ CRITICAL RULES:
 19. CONTEXT AWARENESS: Remember previous messages in the conversation and respond appropriately
 20. FLIGHT CLASS: When users ask for flights, ask about their preferred flight class (Economy, Business, or First Class) if not already mentioned. Use travel_class parameter: 1=Economy, 2=Premium Economy, 3=Business, 4=First Class
 21. FLIGHT TYPE SELECTION: For regular commercial flights (which is the default), ALWAYS use the find_flights function. ONLY use find_chartered_flights when the user explicitly asks for "chartered flights", "private jets", "private flights", or similar private/chartered options. For normal flight searches like "flights from X to Y" or "direct flights from X to Y", use find_flights. 
-
+22. JETS/CHARTER: When the user asks for "jets", "private jets", "charter flights", or "private planes", you MUST use the `find_private_jets` tool. Do not use `find_chartered_flights` unless they specifically mention contacting providers. For a general "show me jets" request, `find_private_jets` is the correct tool.
 Always be conversational, helpful, confirm details, extract information naturally, and remember context!"""
 
 _model = genai.GenerativeModel(
     model_name='gemini-2.5-flash-lite',
-    tools=[find_flights, find_chartered_flights, find_hotels, generate_travel_plan, search_web],
+    tools=[find_flights, find_chartered_flights, find_hotels, generate_travel_plan, search_web,find_private_jets],
     system_instruction=get_system_instruction()
 )
 
 # Per-session chat store in memory
 chat_sessions: Dict[str, Any] = {}
 session_contexts: Dict[str, Dict[str, Any]] = {}  # Store context for each session
+
+ALLOWED_IMAGE_HOSTS = {
+    "lh3.googleusercontent.com",
+    "lh4.googleusercontent.com",
+    "lh5.googleusercontent.com",
+    "lh6.googleusercontent.com",
+    "lh3.ggpht.com",
+    "lh4.ggpht.com",
+    "lh5.ggpht.com",
+    "lh6.ggpht.com",
+}
 
 def get_chat(session_id: str):
     chat = chat_sessions.get(session_id)
@@ -190,6 +204,44 @@ def get_logs(n: int = Query(200, ge=1, le=5000)):
     with open(log_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()[-n:]
     return {"lines": [line.rstrip('\n') for line in lines]}
+
+@app.get("/image-proxy")
+async def image_proxy(url: str):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    host = (parsed.hostname or "").lower()
+    if host not in ALLOWED_IMAGE_HOSTS:
+        raise HTTPException(status_code=400, detail="Image host not allowed")
+
+    try:
+        response = await asyncio.to_thread(
+            requests.get,
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/118.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.google.com/",
+                "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
+            },
+        )
+    except requests.RequestException as exc:
+        app_logger.warning("Image proxy request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Unable to fetch image")
+
+    if response.status_code >= 400:
+        app_logger.warning(
+            "Image proxy upstream error %s for %s", response.status_code, url
+        )
+        raise HTTPException(status_code=502, detail="Image unavailable")
+
+    content_type = response.headers.get("content-type", "image/jpeg")
+    return Response(content=response.content, media_type=content_type)
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
@@ -447,6 +499,23 @@ async def chat(req: ChatRequest):
                     structured = None
                 else:
                     structured = None  # Chartered flights don't return structured data like regular flights
+
+            elif fn == 'find_private_jets': # <--- ADD THIS ENTIRE BLOCK
+                # Update context
+                context["origin"] = args.get('departure_city', context.get("origin", ""))
+                context["destination"] = args.get('arrival_city', context.get("destination", ""))
+                context["depart_date"] = args.get('outbound_date', context.get("depart_date", ""))
+
+                try:
+                    # The function itself returns the structured data directly
+                    jets_result = await find_private_jets(**args)
+                    result = f"Found {len(jets_result)} private jet options for the route {args.get('departure_city')} to {args.get('arrival_city')}."
+                    structured = {"jets": jets_result} # Pass structured data to the frontend
+                except Exception as e:
+                    app_logger.error(f"Error calling find_private_jets with args {args}: {e}", exc_info=True)
+                    result = "I encountered an issue searching for private jets. Please try again."
+                    structured = None
+                                
             else:
                 # Unknown function - provide user-friendly error without mentioning tools
                 app_logger.warning(f"Unknown function called: {fn}")

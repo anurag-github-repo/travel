@@ -34,7 +34,7 @@ if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
     stream_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s - %(message)s'))
     logger.addHandler(stream_handler)
 
-SERP_API_KEY = "e230bec76d1cd5ccedf36f0886ce177bbc3ec5bd8215a7376b7dd28acfe7032d"
+SERP_API_KEY = "82b7c41c0cee2e6589cb906bd90add04b517d6d1ab1e3f5e802b4b5c2720c9e3"
 
 async def _run_search_sync(params: Dict[str, Any]) -> Dict[str, Any]:
     def _call():
@@ -535,6 +535,7 @@ async def search_google(
         logger.error(f"Google search failed: {e}")
         return []
 
+
 # --- serp_wrapper.py code ends here ---
 
 # --- Gemini Chatbot Code ---
@@ -677,6 +678,52 @@ async def find_flights(
         sort_by=to_int_optional(sort_by)
     )
     return summarize_for_ai("Flights", flights)
+
+
+_aircraft_data_cache = None
+
+def load_aircraft_data() -> List[Dict[str, Any]]:
+    """Loads aircraft data from the JSON file with caching."""
+    global _aircraft_data_cache
+    if _aircraft_data_cache is not None:
+        return _aircraft_data_cache
+
+    try:
+        # Assumes the JSON file is in the same directory as this script
+        file_path = os.path.join(os.path.dirname(__file__), 'all_scraped_aircraft_data.json')
+        with open(file_path, 'r', encoding='utf-8') as f:
+            _aircraft_data_cache = json.load(f)
+            logger.info(f"Successfully loaded {len(_aircraft_data_cache)} aircraft records.")
+            return _aircraft_data_cache
+    except Exception as e:
+        logger.error(f"Error loading all_scraped_aircraft_data.json: {e}")
+        return []
+
+async def find_private_jets(
+    departure_city: str,
+    arrival_city: str,
+    outbound_date: str,
+    passengers: int = 1
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves a list of available private jets.
+    This tool is used when the user asks for "jets", "charter flights", or "private planes".
+    
+    Parameters:
+    - departure_city: The city the user is departing from.
+    - arrival_city: The city the user is arriving to.
+    - outbound_date: The date of departure.
+    - passengers: The number of people flying.
+    """
+    logger.info(f"Searching for private jets from {departure_city} to {arrival_city} for {passengers} passengers on {outbound_date}.")
+    
+    # For now, we will return the full list of jets.
+    # In the future, you could add logic here to filter jets based on range, seats, etc.
+    all_jets = load_aircraft_data()
+    
+    return all_jets
+
+
 
 async def find_hotels(location: str, check_in_date: str, check_out_date: str):
     """Finds hotels in a given location for a given date range."""

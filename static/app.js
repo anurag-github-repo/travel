@@ -7,8 +7,30 @@
   const flightsEl = document.getElementById("flights");
   const hotelsEl = document.getElementById("hotels");
   const searchResultsEl = document.getElementById("searchResults");
-  // Removed form elements - no longer needed
   const suggestionBtns = document.querySelectorAll(".suggestion-btn");
+  const tripForm = document.getElementById("tripForm");
+  const originInput = document.getElementById("originInput");
+  const destinationInput = document.getElementById("destinationInput");
+  const departInput = document.getElementById("departInput");
+  const returnInput = document.getElementById("returnInput");
+  const passengerBtn = document.getElementById("passengerBtn");
+  const passengerSummaryEl = document.getElementById("passengerSummary");
+  const passengerPopover = document.getElementById("passengerPopover");
+  const passengerDoneBtn = document.getElementById("passengerDoneBtn");
+  const hiddenCityToggle = document.getElementById("hiddenCityToggle");
+  const swapLocationsBtn = document.getElementById("swapLocations");
+  const tripTypeBtns = document.querySelectorAll(".trip-type-btn");
+  const stopChips = document.querySelectorAll(".stop-chip");
+  const formErrorEl = document.getElementById("formError");
+  const passengerField = document.getElementById("passengerField");
+  const fieldWrappers = {
+    origin: document.getElementById("originField"),
+    destination: document.getElementById("destinationField"),
+    depart: document.getElementById("departField"),
+    return: document.getElementById("returnField"),
+    passengers: passengerField,
+    stops: document.getElementById("stopsField"),
+  };
 
   // Context memory for agentic behavior
   const context = {
@@ -21,6 +43,200 @@
     lastQuery: "",
     extractedInfo: {},
   };
+
+  const passengerCounts = {
+    adults: 1,
+    children: 0,
+    infantsSeat: 0,
+    infantsLap: 0,
+  };
+
+  const formState = {
+    tripType: "round",
+    hiddenCity: false,
+    stops: "nonstop",
+  };
+
+  let passengerPopoverOpen = false;
+  let formErrorTimeout = null;
+  function removeDetailsForm() {
+    if (detailsFormEl && detailsFormEl.parentNode) {
+      detailsFormEl.parentNode.removeChild(detailsFormEl);
+    }
+    detailsFormEl = null;
+  }
+
+  function populateDetailsFormFields(form) {
+    if (!form) return;
+    const departureInput = form.querySelector('input[name="departureDate"]');
+    if (departureInput) {
+      departureInput.value = context.departDate || "";
+    }
+    const returnInput = form.querySelector('input[name="returnDate"]');
+    if (returnInput) {
+      returnInput.value = context.returnDate || "";
+    }
+    const passengersInput = form.querySelector('input[name="passengers"]');
+    if (passengersInput) {
+      passengersInput.value = context.passengers || 1;
+    }
+    const travelClassSelect = form.querySelector('select[name="travelClass"]');
+    if (travelClassSelect) {
+      const value = (context.travelClass || "economy").toLowerCase();
+      travelClassSelect.value = [
+        "economy",
+        "premium economy",
+        "business",
+        "first",
+      ].includes(value)
+        ? value
+        : "economy";
+    }
+    const nonstopCheckbox = form.querySelector('input[name="nonstopOnly"]');
+    if (nonstopCheckbox) {
+      nonstopCheckbox.checked = Boolean(context.nonStopOnly);
+    }
+  }
+
+  function maybeShowDetailsForm() {
+    const hasRoute = context.origin && context.destination;
+    const needsDate = !context.departDate;
+    if (!hasRoute || !needsDate) {
+      if (detailsFormEl) removeDetailsForm();
+      return false;
+    }
+    if (detailsFormEl) {
+      populateDetailsFormFields(detailsFormEl.querySelector("form"));
+      return true;
+    }
+
+    detailsFormEl = document.createElement("div");
+    detailsFormEl.className = "msg bot details-form";
+    const departValue = escapeHtml(context.departDate || "");
+    const returnValue = escapeHtml(context.returnDate || "");
+    const passengersValue = context.passengers || 1;
+    const travelClassValue = (context.travelClass || "economy").toLowerCase();
+    const nonstopChecked = Boolean(context.nonStopOnly);
+    const originLabel = escapeHtml(context.origin);
+    const destinationLabel = escapeHtml(context.destination);
+
+    detailsFormEl.innerHTML = `
+      <form class="details-form-card">
+        <div class="details-form-header">
+          <div class="details-form-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>
+            </svg>
+          </div>
+          <div class="details-form-text">
+            <h4>Let me grab the remaining flight details</h4>
+            <p>Fill these fields so I can find the best options from <strong>${originLabel}</strong> to <strong>${destinationLabel}</strong>.</p>
+          </div>
+        </div>
+        <div class="details-form-grid">
+          <label class="details-form-group">
+            <span>Departure date <sup>*</sup></span>
+            <input type="date" name="departureDate" required value="${departValue}">
+          </label>
+          <label class="details-form-group">
+            <span>Return date</span>
+            <input type="date" name="returnDate" value="${returnValue}">
+          </label>
+          <label class="details-form-group">
+            <span>People travelling</span>
+            <input type="number" name="passengers" min="1" max="9" value="${passengersValue}">
+          </label>
+          <label class="details-form-group">
+            <span>Travel class</span>
+            <select name="travelClass">
+              <option value="economy" ${
+                travelClassValue === "economy" ? "selected" : ""
+              }>Economy</option>
+              <option value="premium economy" ${
+                travelClassValue === "premium economy" ? "selected" : ""
+              }>Premium Economy</option>
+              <option value="business" ${
+                travelClassValue === "business" ? "selected" : ""
+              }>Business</option>
+              <option value="first" ${
+                travelClassValue === "first" ? "selected" : ""
+              }>First Class</option>
+            </select>
+          </label>
+          <label class="details-form-checkbox">
+            <input type="checkbox" name="nonstopOnly" ${
+              nonstopChecked ? "checked" : ""
+            }>
+            <span>Show nonstop flights only</span>
+          </label>
+        </div>
+        <div class="details-form-actions">
+          <button type="submit" class="details-form-submit">Send details</button>
+          <button type="button" class="details-form-skip" data-action="skip">I'll share later</button>
+        </div>
+      </form>
+    `;
+
+    chatMessagesEl.appendChild(detailsFormEl);
+    scrollToBottom(true);
+
+    const form = detailsFormEl.querySelector("form");
+    const skipBtn = detailsFormEl.querySelector('[data-action="skip"]');
+
+    populateDetailsFormFields(form);
+
+    if (skipBtn) {
+      skipBtn.addEventListener("click", () => {
+        removeDetailsForm();
+        addMsgWithVoice(
+          "No rush! Share your travel dates whenever you're ready and I'll take it from there.",
+          "bot"
+        );
+      });
+    }
+
+    if (form) {
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const submitBtn = form.querySelector(".details-form-submit");
+        if (submitBtn) submitBtn.disabled = true;
+
+        const formData = new FormData(form);
+        const departureDate = formData.get("departureDate");
+        const returnDate = formData.get("returnDate");
+        const passengers = Number(formData.get("passengers")) || 1;
+        const travelClassValue = formData.get("travelClass") || "economy";
+        const nonstopOnly = formData.get("nonstopOnly") === "on";
+
+        context.departDate = departureDate;
+        context.returnDate = returnDate || "";
+        context.passengers = passengers;
+        context.travelClass = travelClassValue;
+        context.nonStopOnly = nonstopOnly;
+
+        const classLabel =
+          travelClassValue.charAt(0).toUpperCase() + travelClassValue.slice(1);
+
+        const summaryParts = [
+          `Route: ${context.origin} to ${context.destination}`,
+          departureDate ? `Departure date: ${departureDate}` : "",
+          returnDate ? `Return date: ${returnDate}` : "",
+          passengers ? `Travellers: ${passengers}` : "",
+          classLabel ? `Travel class: ${classLabel}` : "",
+          nonstopOnly ? "Preference: Nonstop flights only" : "",
+        ].filter(Boolean);
+
+        removeDetailsForm();
+
+        const summaryMessage = `Here are my flight details:\n${summaryParts
+          .map((part) => `• ${part}`)
+          .join("\n")}\nPlease find the best flight options for me.`;
+
+        sendChatMessage(summaryMessage);
+      });
+    }
+    return true;
+  }
 
   // Map - Leaflet
   let map;
@@ -103,6 +319,324 @@
     }
   }
 
+  function formatDateForMessage(value) {
+    if (!value) return "";
+    const d = new Date(value);
+    if (Number.isNaN(d.valueOf())) {
+      return value;
+    }
+    return d.toLocaleDateString(undefined, {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+
+  function getPassengerBreakdown() {
+    const parts = [];
+    if (passengerCounts.adults > 0) {
+      parts.push(
+        `${passengerCounts.adults} Adult${
+          passengerCounts.adults > 1 ? "s" : ""
+        }`
+      );
+    }
+    if (passengerCounts.children > 0) {
+      parts.push(
+        `${passengerCounts.children} Child${
+          passengerCounts.children > 1 ? "ren" : ""
+        }`
+      );
+    }
+    if (passengerCounts.infantsSeat > 0) {
+      parts.push(
+        `${passengerCounts.infantsSeat} Infant${
+          passengerCounts.infantsSeat > 1 ? "s" : ""
+        } (seat)`
+      );
+    }
+    if (passengerCounts.infantsLap > 0) {
+      parts.push(
+        `${passengerCounts.infantsLap} Infant${
+          passengerCounts.infantsLap > 1 ? "s" : ""
+        } (lap)`
+      );
+    }
+    return parts.join(", ");
+  }
+
+  function syncPassengerCountUI() {
+    if (!passengerPopover) return;
+    Object.entries(passengerCounts).forEach(([type, value]) => {
+      const el = passengerPopover.querySelector(`[data-count="${type}"]`);
+      if (el) {
+        el.textContent = value;
+      }
+    });
+  }
+
+  function updatePassengerSummary() {
+    syncPassengerCountUI();
+    if (!passengerSummaryEl) return;
+    const total =
+      passengerCounts.adults +
+      passengerCounts.children +
+      passengerCounts.infantsSeat +
+      passengerCounts.infantsLap;
+    const breakdown = getPassengerBreakdown();
+    passengerSummaryEl.textContent = breakdown || `${total} Traveler${
+      total > 1 ? "s" : ""
+    }`;
+    if (passengerBtn) {
+      passengerBtn.setAttribute(
+        "aria-label",
+        `Passengers: ${breakdown || `${total} traveler${total > 1 ? "s" : ""}`}`
+      );
+    }
+  }
+
+  function adjustPassenger(type, delta) {
+    if (!(type in passengerCounts)) return;
+    const current = passengerCounts[type];
+    let next = current + delta;
+    if (type === "adults") {
+      next = Math.max(1, next);
+    } else {
+      next = Math.max(0, next);
+    }
+    if (type === "infantsLap") {
+      next = Math.min(next, passengerCounts.adults);
+    }
+    passengerCounts[type] = next;
+    if (type === "adults" && passengerCounts.infantsLap > next) {
+      passengerCounts.infantsLap = next;
+    }
+    updatePassengerSummary();
+  }
+
+  function openPassengerPopover() {
+    if (!passengerPopover || !passengerBtn) return;
+    passengerPopover.classList.add("open");
+    passengerBtn.setAttribute("aria-expanded", "true");
+    passengerPopoverOpen = true;
+  }
+
+  function closePassengerPopover() {
+    if (!passengerPopover || !passengerBtn) return;
+    passengerPopover.classList.remove("open");
+    passengerBtn.setAttribute("aria-expanded", "false");
+    passengerPopoverOpen = false;
+  }
+
+  function togglePassengerPopover() {
+    if (passengerPopoverOpen) {
+      closePassengerPopover();
+    } else {
+      openPassengerPopover();
+    }
+  }
+
+  function applyTripTypeState() {
+    if (!returnInput) return;
+    if (formState.tripType === "oneway") {
+      returnInput.value = "";
+      returnInput.disabled = true;
+      returnInput.setAttribute("aria-disabled", "true");
+    } else {
+      returnInput.disabled = false;
+      returnInput.removeAttribute("aria-disabled");
+    }
+  }
+
+  function showFormError(message) {
+    if (!formErrorEl) return;
+    clearTimeout(formErrorTimeout);
+    if (message) {
+      formErrorEl.textContent = message;
+      formErrorEl.classList.add("visible");
+      formErrorTimeout = setTimeout(() => {
+        formErrorEl.classList.remove("visible");
+        formErrorEl.textContent = "";
+      }, 4000);
+    } else {
+      formErrorEl.classList.remove("visible");
+      formErrorEl.textContent = "";
+    }
+  }
+
+  function highlightField(key, opts = {}) {
+    const wrapper = fieldWrappers[key];
+    if (!wrapper) return;
+    wrapper.classList.add("field-highlight");
+    setTimeout(() => {
+      wrapper.classList.remove("field-highlight");
+    }, 1600);
+    const focusable =
+      wrapper.querySelector("input:not([disabled])") ||
+      wrapper.querySelector("button");
+    if (focusable && focusable.focus) {
+      try {
+        focusable.focus({ preventScroll: false });
+      } catch (e) {
+        focusable.focus();
+      }
+    }
+    if (opts.openPassengers) {
+      openPassengerPopover();
+    }
+  }
+
+  function handleBotGuidance(text) {
+    if (!text || !tripForm) return;
+    const lower = text.toLowerCase();
+    if (
+      lower.includes("where are you leaving") ||
+      lower.includes("origin") ||
+      lower.includes("departing from") ||
+      lower.includes("flying from") ||
+      lower.includes("leaving from")
+    ) {
+      highlightField("origin");
+    }
+    if (
+      lower.includes("destination") ||
+      lower.includes("going to") ||
+      lower.includes("flying to") ||
+      lower.includes("heading to")
+    ) {
+      highlightField("destination");
+    }
+    if (
+      lower.includes("departure date") ||
+      lower.includes("depart date") ||
+      lower.includes("when would you like to travel") ||
+      lower.includes("when are you leaving")
+    ) {
+      highlightField("depart");
+    }
+    if (
+      lower.includes("return date") ||
+      lower.includes("coming back") ||
+      lower.includes("returning") ||
+      lower.includes("return flight")
+    ) {
+      highlightField("return");
+    }
+    if (
+      lower.includes("passenger") ||
+      lower.includes("traveler") ||
+      lower.includes("how many people") ||
+      lower.includes("how many travellers") ||
+      lower.includes("who is traveling")
+    ) {
+      highlightField("passengers", { openPassengers: true });
+    }
+    if (lower.includes("nonstop") || lower.includes("number of stops")) {
+      highlightField("stops");
+    }
+  }
+
+  function buildMessageFromForm() {
+    if (!tripForm) return null;
+    const originValue = originInput ? originInput.value.trim() : "";
+    const destinationValue = destinationInput
+      ? destinationInput.value.trim()
+      : "";
+    const departValue = departInput ? departInput.value : "";
+    const returnValue =
+      returnInput && !returnInput.disabled ? returnInput.value : "";
+    const totalPassengers =
+      passengerCounts.adults +
+      passengerCounts.children +
+      passengerCounts.infantsSeat +
+      passengerCounts.infantsLap;
+    const passengerBreakdown = getPassengerBreakdown();
+    const passengerChanged =
+      totalPassengers !== 1 ||
+      passengerCounts.children > 0 ||
+      passengerCounts.infantsSeat > 0 ||
+      passengerCounts.infantsLap > 0;
+    const hasMeaningfulDetail =
+      originValue ||
+      destinationValue ||
+      departValue ||
+      (formState.tripType === "round" && returnValue) ||
+      passengerChanged ||
+      formState.tripType === "oneway" ||
+      formState.stops !== "nonstop" ||
+      formState.hiddenCity;
+    if (!hasMeaningfulDetail) {
+      return null;
+    }
+    const messageParts = [];
+    if (formState.tripType === "oneway") {
+      messageParts.push("one-way trip");
+    } else if (
+      formState.tripType === "round" &&
+      (departValue || returnValue || (originValue && destinationValue))
+    ) {
+      messageParts.push("round trip");
+    }
+    if (originValue && destinationValue) {
+      messageParts.push(`from ${originValue} to ${destinationValue}`);
+    } else if (originValue) {
+      messageParts.push(`leaving from ${originValue}`);
+    } else if (destinationValue) {
+      messageParts.push(`heading to ${destinationValue}`);
+    }
+    if (departValue) {
+      messageParts.push(`departing on ${formatDateForMessage(departValue)}`);
+    }
+    if (formState.tripType === "round" && returnValue) {
+      messageParts.push(`returning on ${formatDateForMessage(returnValue)}`);
+    }
+    if (
+      passengerBreakdown &&
+      (passengerChanged ||
+        originValue ||
+        destinationValue ||
+        departValue ||
+        returnValue)
+    ) {
+      messageParts.push(`for ${passengerBreakdown}`);
+    }
+    if (formState.stops === "nonstop" && messageParts.length > 0) {
+      messageParts.push("nonstop flights only");
+    } else if (formState.stops === "oneStop") {
+      messageParts.push("up to one stop");
+    } else if (formState.stops === "any") {
+      messageParts.push("any number of stops");
+    }
+    if (formState.hiddenCity) {
+      messageParts.push("include hidden-city options");
+    }
+
+    if (originValue) context.origin = originValue;
+    if (destinationValue) context.destination = destinationValue;
+    if (departValue) context.departDate = departValue;
+    if (formState.tripType === "round") {
+      if (returnValue) context.returnDate = returnValue;
+    } else {
+      context.returnDate = "";
+    }
+
+    context.roundTrip = formState.tripType === "round";
+    context.passengers = totalPassengers;
+    context.extractedInfo = {
+      ...(context.extractedInfo || {}),
+      passengers: { ...passengerCounts },
+      stops: formState.stops,
+      hiddenCity: formState.hiddenCity,
+      tripType: formState.tripType,
+      formSubmission: true,
+    };
+
+    if (!messageParts.length) {
+      return null;
+    }
+    return `Flight search request: ${messageParts.join(", ")}.`;
+  }
+
   // Extract information from text using regex patterns
   function extractInfo(text) {
     const info = {};
@@ -171,6 +705,61 @@
     return html;
   }
 
+  function formatINRPrice(value) {
+    if (value == null) return "N/A";
+
+    if (typeof value === "number" && !Number.isNaN(value)) {
+      return `₹${value.toLocaleString("en-IN")}`;
+    }
+
+    const str = String(value).trim();
+    if (!str) return "N/A";
+
+    if (/^(?:n\/a|na|not available|none)$/i.test(str)) {
+      return "N/A";
+    }
+
+    if (/₹|rs\.?|inr/i.test(str)) {
+      return str
+        .replace(/Rs\.?/gi, "₹")
+        .replace(/INR/gi, "₹")
+        .replace(/\s+/g, " ")
+        .replace(/^₹\s*/, "₹")
+        .trim();
+    }
+
+    const sanitized = str.replace(/,/g, "").replace(/[^0-9.]/g, "");
+    if (sanitized) {
+      const numeric = Number(sanitized);
+      if (!Number.isNaN(numeric) && numeric > 0) {
+        const formatter = new Intl.NumberFormat("en-IN", {
+          minimumFractionDigits: sanitized.includes(".") ? 2 : 0,
+          maximumFractionDigits: sanitized.includes(".") ? 2 : 0,
+        });
+        return `₹${formatter.format(numeric)}`;
+      }
+    }
+
+    return `₹${str}`;
+  }
+
+  function buildImageUrl(rawUrl) {
+    if (!rawUrl) return "";
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      const host = parsed.hostname;
+      if (
+        host.endsWith(".googleusercontent.com") ||
+        host.endsWith(".ggpht.com")
+      ) {
+        return `/image-proxy?url=${encodeURIComponent(rawUrl)}`;
+      }
+    } catch (e) {
+      // Ignore parsing errors and fall back to raw URL
+    }
+    return rawUrl;
+  }
+
   // Render flight table in chat message
   function renderFlightTable(flights) {
     if (!flights || flights.length === 0) return "";
@@ -203,7 +792,7 @@
       }</small></td>
           <td>${flight.duration || "N/A"}</td>
           <td>${flight.stops || "N/A"}</td>
-          <td><strong>${flight.price || "N/A"}</strong></td>
+          <td><strong>${formatINRPrice(flight.price)}</strong></td>
         </tr>
       `;
     });
@@ -274,6 +863,7 @@
         content += renderFlightTable(flights);
       }
       div.innerHTML = content;
+      handleBotGuidance(text);
     } else {
       div.textContent = text; // User messages stay as plain text
     }
@@ -428,7 +1018,10 @@
     ) {
       // Try to load the actual image
       // Don't set crossOrigin for Google images - they should work without it
-      img.src = h.image_url;
+      img.referrerPolicy = "no-referrer";
+      const resolvedUrl = buildImageUrl(h.image_url);
+      img.dataset.originalSrc = h.image_url;
+      img.src = resolvedUrl;
 
       // Add loading state
       img.style.backgroundColor = "#f0f0f0";
@@ -437,7 +1030,10 @@
       img.onerror = function () {
         // Prevent infinite loop - only set once
         if (this.src !== placeholderDataUri && !this.src.startsWith("data:")) {
-          console.log("Failed to load hotel image:", h.image_url);
+          console.warn(
+            "Failed to load hotel image:",
+            this.dataset.originalSrc || this.src
+          );
           this.src = placeholderDataUri;
           this.onerror = null; // Remove error handler to prevent loops
         }
@@ -456,6 +1052,7 @@
     const content = document.createElement("div");
     content.className = "card-content";
     const ratingStars = "⭐".repeat(Math.floor(h.rating || 0));
+    const priceText = formatINRPrice(h.price_per_night);
     content.innerHTML = `
       <div class="card-title">${h.name || ""}</div>
       <div class="card-detail" style="color: #999; margin-bottom: 12px;">${
@@ -467,7 +1064,7 @@
           : ""
       }
       <div class="card-detail" style="margin-top: 12px; font-size: 20px; font-weight: 600; color: #10b981;">${
-        h.price_per_night || "N/A"
+        priceText
       }<span style="font-size: 14px; font-weight: 400; color: #666;"> / night</span></div>
       <a href="${
         h.link || "#"
@@ -578,6 +1175,7 @@
     // Price section
     const priceDiv = document.createElement("div");
     priceDiv.className = "flight-price";
+    const priceAmount = formatINRPrice(f.price);
 
     // Build booking links array
     const bookingLinks = [];
@@ -593,20 +1191,90 @@
     if (f.momondo_link)
       bookingLinks.push({ name: "Momondo", url: f.momondo_link });
 
-    const linksHTML = bookingLinks
-      .map(
-        (link) =>
-          `<a href="${link.url}" target="_blank" class="flight-action-link" title="${link.name}">${link.name}</a>`
-      )
-      .join("");
+    const priceAmountEl = document.createElement("div");
+    priceAmountEl.className = "flight-price-amount";
+    priceAmountEl.textContent = priceAmount;
 
-    priceDiv.innerHTML = `
-      <div class="flight-price-amount">${f.price || "N/A"}</div>
-      <div class="flight-price-airline">${f.airline || ""}</div>
-      <div class="flight-actions" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
-        ${linksHTML}
-      </div>
-    `;
+    const airlineEl = document.createElement("div");
+    airlineEl.className = "flight-price-airline";
+    airlineEl.textContent = f.airline || "";
+
+    const actionsWrapper = document.createElement("div");
+    actionsWrapper.className = "flight-actions";
+
+    const visibleLinks = bookingLinks.slice(0, 3);
+    const extraLinks = bookingLinks.slice(3);
+
+    visibleLinks.forEach((link) => {
+      const anchor = document.createElement("a");
+      anchor.href = link.url;
+      anchor.target = "_blank";
+      anchor.rel = "noopener";
+      anchor.className = "flight-action-link";
+      anchor.title = link.name;
+      anchor.textContent = link.name;
+      actionsWrapper.appendChild(anchor);
+    });
+
+    if (extraLinks.length > 0) {
+      const moreWrapper = document.createElement("div");
+      moreWrapper.className = "flight-actions-more";
+
+      const moreButton = document.createElement("button");
+      moreButton.type = "button";
+      moreButton.className = "flight-more-btn";
+      moreButton.textContent = `More (${extraLinks.length})`;
+
+      const dropdown = document.createElement("div");
+      dropdown.className = "flight-more-dropdown";
+
+      const closeDropdown = (event) => {
+        if (!moreWrapper.contains(event.target)) {
+          dropdown.classList.remove("open");
+          document.removeEventListener("click", closeDropdown);
+        }
+      };
+
+      extraLinks.forEach((link) => {
+        const dropdownLink = document.createElement("a");
+        dropdownLink.href = link.url;
+        dropdownLink.target = "_blank";
+        dropdownLink.rel = "noopener";
+        dropdownLink.className = "flight-action-link";
+        dropdownLink.textContent = link.name;
+        dropdownLink.title = link.name;
+        dropdownLink.addEventListener("click", () => {
+          dropdown.classList.remove("open");
+          document.removeEventListener("click", closeDropdown);
+        });
+        dropdown.appendChild(dropdownLink);
+      });
+
+      moreButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const willOpen = !dropdown.classList.contains("open");
+        dropdown.classList.toggle("open", willOpen);
+        if (willOpen) {
+          document.addEventListener("click", closeDropdown);
+        } else {
+          document.removeEventListener("click", closeDropdown);
+        }
+      });
+
+      dropdown.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+
+      moreWrapper.appendChild(moreButton);
+      moreWrapper.appendChild(dropdown);
+      actionsWrapper.appendChild(moreWrapper);
+    }
+
+    priceDiv.appendChild(priceAmountEl);
+    priceDiv.appendChild(airlineEl);
+    if (bookingLinks.length > 0) {
+      priceDiv.appendChild(actionsWrapper);
+    }
 
     infoDiv.appendChild(durationDiv);
     infoDiv.appendChild(timesDiv);
@@ -911,7 +1579,7 @@
 
     try {
       const body = { session_id: sessionId, message: message };
-      const r = await fetch(`/chat`, {
+      const r = await fetch(`https://x8f5h1m2-8000.inc1.devtunnels.ms/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1112,17 +1780,25 @@
       // Determine which tab to switch to based on user request priority
       let tabToSwitch = null;
       // Priority: explicit requests first, then by data availability
-      if (hasSearchRequest && (searchResults.length > 0 || hasSearchRequest)) {
-        tabToSwitch = "search";
-      } else if (hasHotelRequest && hotels.length > 0) {
+      // Search results will now show in the travel plan tab
+      if (hasHotelRequest && hotels.length > 0) {
         tabToSwitch = "hotels"; // Explicit hotel request - switch to hotels tab
-      } else if (hasPlanRequest && travelPlanText) {
-        tabToSwitch = "plan";
+      } else if (
+        hasPlanRequest &&
+        (travelPlanText || searchResults.length > 0)
+      ) {
+        tabToSwitch = "plan"; // Travel plan or search results
       } else if (hasFlightRequest && flights.length > 0) {
         tabToSwitch = "flights";
+      } else if (hasSearchRequest && searchResults.length > 0) {
+        tabToSwitch = "plan"; // Show search results in plan tab
       } else if (hotels.length > 0 && !flights.length) {
         tabToSwitch = "hotels"; // If we have hotels and no flights, show hotels
-      } else if (travelPlanText && !flights.length && !hotels.length) {
+      } else if (
+        (travelPlanText || searchResults.length > 0) &&
+        !flights.length &&
+        !hotels.length
+      ) {
         tabToSwitch = "plan";
       } else if (flights.length > 0) {
         tabToSwitch = "flights";
@@ -1309,6 +1985,25 @@
         if (tabBtn) {
           tabBtn.click();
         }
+
+        // Auto-switch to appropriate mobile tab on mobile when results appear
+        if (window.innerWidth <= 968) {
+          let mobileTabName = "flights"; // default
+          if (tabToSwitch === "hotels") {
+            mobileTabName = "hotels";
+          } else if (tabToSwitch === "plan") {
+            mobileTabName = "plan";
+          } else if (tabToSwitch === "flights") {
+            mobileTabName = "flights";
+          }
+
+          const mobileTablBtn = document.querySelector(
+            `[data-mobile-tab="${mobileTabName}"]`
+          );
+          if (mobileTablBtn) {
+            mobileTablBtn.click();
+          }
+        }
       }
 
       // Final scroll to ensure all content is visible (single optimized call)
@@ -1327,6 +2022,121 @@
     }
   }
 
+  // Trip form interactions
+  if (tripForm) {
+    updatePassengerSummary();
+    applyTripTypeState();
+  }
+
+  if (passengerBtn) {
+    passengerBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      togglePassengerPopover();
+    });
+  }
+
+  if (passengerDoneBtn) {
+    passengerDoneBtn.addEventListener("click", () => {
+      closePassengerPopover();
+    });
+  }
+
+  if (passengerPopover) {
+    passengerPopover.addEventListener("click", (e) => e.stopPropagation());
+    passengerPopover.querySelectorAll(".counter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = btn.closest(".passenger-row");
+        if (!row) return;
+        const type = row.dataset.type;
+        const delta = btn.dataset.action === "increment" ? 1 : -1;
+        adjustPassenger(type, delta);
+      });
+    });
+  }
+
+  if (passengerField) {
+    document.addEventListener("click", (event) => {
+      if (
+        passengerPopoverOpen &&
+        !passengerField.contains(event.target) &&
+        passengerPopover
+      ) {
+        closePassengerPopover();
+      }
+    });
+  }
+
+  if (hiddenCityToggle) {
+    hiddenCityToggle.addEventListener("change", () => {
+      formState.hiddenCity = hiddenCityToggle.checked;
+    });
+  }
+
+  if (tripTypeBtns.length) {
+    tripTypeBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const type = btn.dataset.tripType;
+        if (!type || formState.tripType === type) return;
+        formState.tripType = type;
+        tripTypeBtns.forEach((b) => {
+          const isActive = b.dataset.tripType === type;
+          b.classList.toggle("active", isActive);
+          b.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        applyTripTypeState();
+      });
+    });
+  }
+
+  if (stopChips.length) {
+    stopChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const value = chip.dataset.stopsOption || "nonstop";
+        formState.stops = value;
+        stopChips.forEach((c) => {
+          const isActive = c === chip;
+          c.classList.toggle("active", isActive);
+          c.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+      });
+    });
+  }
+
+  if (swapLocationsBtn) {
+    swapLocationsBtn.addEventListener("click", () => {
+      if (!originInput || !destinationInput) return;
+      const tmp = originInput.value;
+      originInput.value = destinationInput.value;
+      destinationInput.value = tmp;
+      highlightField("origin");
+      highlightField("destination");
+    });
+  }
+
+  if (departInput && returnInput) {
+    departInput.addEventListener("change", () => {
+      if (!departInput.value) return;
+      returnInput.min = departInput.value;
+      if (returnInput.value && returnInput.value < departInput.value) {
+        returnInput.value = departInput.value;
+      }
+    });
+  }
+
+  if (tripForm) {
+    tripForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const message = buildMessageFromForm();
+      if (!message) {
+        showFormError("Add at least one trip detail before sending.");
+        return;
+      }
+      showFormError("");
+      closePassengerPopover();
+      sendChatMessage(message);
+    });
+  }
+
   // Event listeners
   chatSendBtn.addEventListener("click", () =>
     sendChatMessage(chatInputEl.value)
@@ -1340,8 +2150,6 @@
       sendChatMessage(btn.dataset.suggestion);
     });
   });
-
-  // Removed form-related event listeners
 
   // Toggle between map and results
   const toggleViewBtn = document.getElementById("toggleView");
@@ -1391,7 +2199,6 @@
     flights: document.getElementById("tab-flights"),
     hotels: document.getElementById("tab-hotels"),
     plan: document.getElementById("tab-plan"),
-    search: document.getElementById("tab-search"),
   };
 
   tabBtns.forEach((btn) => {
@@ -1642,6 +2449,34 @@
       "bot"
     );
   }
+
+  // Mobile tabs functionality
+  const mobileTabBtns = document.querySelectorAll(".mobile-tab-btn");
+  mobileTabBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tabName = btn.dataset.mobileTab;
+
+      // Update active state
+      mobileTabBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      // Remove all mobile active classes
+      document.body.classList.remove("mobile-flights-active");
+      document.body.classList.remove("mobile-hotels-active");
+      document.body.classList.remove("mobile-plan-active");
+
+      // Switch views
+      if (tabName === "chat") {
+        // Show chat panel
+      } else if (tabName === "flights") {
+        document.body.classList.add("mobile-flights-active");
+      } else if (tabName === "hotels") {
+        document.body.classList.add("mobile-hotels-active");
+      } else if (tabName === "plan") {
+        document.body.classList.add("mobile-plan-active");
+      }
+    });
+  });
 
   // Initialize map
   initMap();
