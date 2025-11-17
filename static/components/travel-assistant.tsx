@@ -1,16 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import {
-  Moon,
-  Sun,
-  Send,
-  Mic,
-  Volume2,
-  VolumeX,
-  Map as MapIcon,
-  List,
-} from "lucide-react";
+import { Moon, Sun, Send, Mic, Volume2, VolumeX } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +10,7 @@ import ChatPanel from "@/components/chat-panel";
 import FlightsPanel from "@/components/flights-panel";
 import HotelsPanel from "@/components/hotels-panel";
 import TravelPlanPanel from "@/components/travel-plan-panel";
-import AirportsMap from "@/components/airports-map";
+import FlightSearchForm from "@/components/flight-search-form";
 import Image from "next/image";
 import type {
   Message,
@@ -29,25 +20,44 @@ import type {
   SearchResult,
   Route,
   APIResponse,
-  Aircraft
+  Aircraft,
 } from "@/lib/types";
 import { extractInfo } from "@/lib/helpers";
 import JetsPanel from "./jets-panel";
-import JetDetailModal from "@/components/jet-detail-modal"; 
+import JetDetailModal from "@/components/jet-detail-modal";
+import VoiceModePanel from "@/components/voice-mode-panel";
 
 export default function TravelAssistant() {
   const { theme, setTheme } = useTheme();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [jets, setJets] = useState<Aircraft[]>([]);
-   const [selectedJet, setSelectedJet] = useState<Aircraft | null>(null);
-  const [context, setContext] = useState<Context>({
+  const [selectedJet, setSelectedJet] = useState<Aircraft | null>(null);
+  const [showQuickForm, setShowQuickForm] = useState(false);
+  const [quickFormKey, setQuickFormKey] = useState(0);
+  const quickFormDefaultsRef = useRef<Partial<Context>>({});
+
+  // Separate contexts for flights and jets
+  const [flightContext, setFlightContext] = useState<Context>({
     origin: "",
     destination: "",
     departDate: "",
     returnDate: "",
     passengers: 1,
-    roundTrip: true,
+    roundTrip: false,
+    lastQuery: "",
+    extractedInfo: {},
+    travelClass: "economy",
+    nonStopOnly: false,
+  });
+
+  const [jetContext, setJetContext] = useState<Context>({
+    origin: "",
+    destination: "",
+    departDate: "",
+    returnDate: "",
+    passengers: 1,
+    roundTrip: false,
     lastQuery: "",
     extractedInfo: {},
     travelClass: "economy",
@@ -61,10 +71,15 @@ export default function TravelAssistant() {
   const [travelPlanImages, setTravelPlanImages] = useState<
     Record<string, string>
   >({});
-  const [route, setRoute] = useState<Route | null>(null);
+
+  // Separate routes for flights and jets
+  const [flightRoute, setFlightRoute] = useState<Route | null>(null);
+  const [jetRoute, setJetRoute] = useState<Route | null>(null);
+
   const [activeTab, setActiveTab] = useState("flights");
-  const [showAirportsMap, setShowAirportsMap] = useState(false);
   const [mobileTab, setMobileTab] = useState("chat");
+  const [flightsSearched, setFlightsSearched] = useState(false);
+  const [jetsSearched, setJetsSearched] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [voiceOutputEnabled, setVoiceOutputEnabled] = useState(false);
@@ -74,29 +89,89 @@ export default function TravelAssistant() {
   const recognitionRef = useRef<any>(null);
   const sessionIdRef = useRef(Math.random().toString(36).slice(2));
 
-  // Initialize voice output state from localStorage
   useEffect(() => {
     const saved = localStorage.getItem("voiceOutput");
     setVoiceOutputEnabled(saved !== "false");
   }, []);
 
-  // Debug: Log route changes
-  useEffect(() => {
-    console.log("🗺️ Route state updated:", route);
-    if (route) {
-      console.log("Route details:", {
-        from: `${route.from.city} (${route.from.lat}, ${route.from.lon})`,
-        to: `${route.to.city} (${route.to.lat}, ${route.to.lon})`
-      });
-    }
-  }, [route]);
-
-  // Scroll to bottom on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Voice input setup
+  // Handle flight location changes - create route immediately
+  useEffect(() => {
+    const updateFlightRoute = async () => {
+      if (flightContext.origin && flightContext.destination) {
+        // Clear flight search results when locations change
+        setFlights([]);
+        setFlightsSearched(false);
+
+        // Create route for the new locations
+        const { getCityCoordinates } = await import("@/lib/city-coordinates");
+        const fromCoords = getCityCoordinates(flightContext.origin);
+        const toCoords = getCityCoordinates(flightContext.destination);
+
+        if (fromCoords && toCoords) {
+          const newRoute: Route = {
+            from: {
+              city: flightContext.origin,
+              lat: fromCoords.lat,
+              lon: fromCoords.lon,
+            },
+            to: {
+              city: flightContext.destination,
+              lat: toCoords.lat,
+              lon: toCoords.lon,
+            },
+          };
+          setFlightRoute(newRoute);
+        }
+      } else {
+        // If no complete route, clear route
+        setFlightRoute(null);
+      }
+    };
+
+    updateFlightRoute();
+  }, [flightContext.origin, flightContext.destination]);
+
+  // Handle jet location changes - create route immediately
+  useEffect(() => {
+    const updateJetRoute = async () => {
+      if (jetContext.origin && jetContext.destination) {
+        // Clear jet search results when locations change
+        setJets([]);
+        setJetsSearched(false);
+
+        // Create route for the new locations
+        const { getCityCoordinates } = await import("@/lib/city-coordinates");
+        const fromCoords = getCityCoordinates(jetContext.origin);
+        const toCoords = getCityCoordinates(jetContext.destination);
+
+        if (fromCoords && toCoords) {
+          const newRoute: Route = {
+            from: {
+              city: jetContext.origin,
+              lat: fromCoords.lat,
+              lon: fromCoords.lon,
+            },
+            to: {
+              city: jetContext.destination,
+              lat: toCoords.lat,
+              lon: toCoords.lon,
+            },
+          };
+          setJetRoute(newRoute);
+        }
+      } else {
+        // If no complete route, clear route
+        setJetRoute(null);
+      }
+    };
+
+    updateJetRoute();
+  }, [jetContext.origin, jetContext.destination]);
+
   useEffect(() => {
     if (
       typeof window !== "undefined" &&
@@ -156,7 +231,7 @@ export default function TravelAssistant() {
         !voiceOutputEnabled
       )
         return;
-      if (text.length > 200) return; // Don't speak long messages
+      if (text.length > 200) return;
 
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -172,39 +247,78 @@ export default function TravelAssistant() {
     const text = messageText || inputValue.trim();
     if (!text) return;
 
-    // Add user message
     setMessages((prev) => [...prev, { text, who: "user" }]);
     setInputValue("");
 
-    // Extract info and update context
     const extracted = extractInfo(text);
-    setContext((prev) => ({ ...prev, ...extracted, lastQuery: text }));
 
-    // Show loading
+    // Determine if this is a jet or flight query based on keywords
+    const isJetQuery =
+      text.toLowerCase().includes("jet") ||
+      text.toLowerCase().includes("private");
+
+    // Update appropriate context based on query type
+    if (isJetQuery) {
+      setJetContext((prev) => ({ ...prev, ...extracted, lastQuery: text }));
+    } else {
+      setFlightContext((prev) => ({ ...prev, ...extracted, lastQuery: text }));
+    }
+
+    const hasLocation = extracted.origin || extracted.destination;
+    const hasCompleteDetails = extracted.departDate || extracted.passengers > 1;
+
+    if (hasLocation && !hasCompleteDetails && text.length < 50) {
+      // Store extracted values for quick form (using ref for immediate update)
+      // Don't read from state context as it hasn't updated yet (async)
+      quickFormDefaultsRef.current = {
+        origin: extracted.origin || "",
+        destination: extracted.destination || "",
+        departDate: extracted.departDate || "",
+        returnDate: extracted.returnDate || "",
+        passengers: extracted.passengers || 1,
+        roundTrip: extracted.roundTrip || false,
+        travelClass: extracted.travelClass || "economy",
+        nonStopOnly: extracted.nonStopOnly || false,
+        lastQuery: text,
+        searchType: isJetQuery ? "jet" : "flight",
+      };
+      setQuickFormKey((prev) => prev + 1); // Force fresh mount
+      setShowQuickForm(true);
+      setMessages((prev) => [
+        ...prev,
+        {
+          text: `I can help you search ${isJetQuery ? "jets" : "flights"} ${
+            extracted.origin
+              ? `from ${extracted.origin}`
+              : extracted.destination
+              ? `to ${extracted.destination}`
+              : ""
+          }. Please fill in the details below:`,
+          who: "bot",
+        },
+      ]);
+      return;
+    }
+
     setMessages((prev) => [
       ...prev,
       { text: "Searching...", who: "bot", isLoading: true },
     ]);
 
     try {
-      const response = await fetch(
-        "http://localhost:8000/chat",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_id: sessionIdRef.current,
-            message: text,
-          }),
-        }
-      );
+      const response = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          message: text,
+        }),
+      });
 
       const data: APIResponse = await response.json();
 
-      // Remove loading message
       setMessages((prev) => prev.filter((m) => !m.isLoading));
 
-      // Process response
       let botText = data.text?.trim() || "";
       let flightsForChat: Flight[] = [];
       let newFlights: Flight[] = [];
@@ -214,7 +328,7 @@ export default function TravelAssistant() {
       let newTravelPlan = "";
       let newTravelPlanImages: Record<string, string> = {};
       let newJets: Aircraft[] = [];
-      // Process tool results
+
       data.tool_results?.forEach((tr) => {
         if (tr.flights) {
           newFlights = tr.flights;
@@ -236,35 +350,37 @@ export default function TravelAssistant() {
         }
       });
 
-      // Update state
       if (newFlights.length > 0) {
         setFlights(newFlights);
+        setFlightsSearched(true);
         setActiveTab("flights");
-        // Auto-switch to flights tab on mobile when flights are loaded
         if (typeof window !== "undefined" && window.innerWidth < 768) {
           setMobileTab("flights");
         }
 
-        // Create route from context if not provided by API
+        // Update flight context with extracted info
+        setFlightContext((prev) => ({
+          ...prev,
+          origin: extracted.origin || prev.origin,
+          destination: extracted.destination || prev.destination,
+        }));
+
+        // Create flight route if not provided by API
         if (
           !newRoute &&
-          (context.origin || extracted.origin) &&
-          (context.destination || extracted.destination)
+          (flightContext.origin || extracted.origin) &&
+          (flightContext.destination || extracted.destination)
         ) {
           const { getCityCoordinates } = await import("@/lib/city-coordinates");
-          const origin = extracted.origin || context.origin;
-          const destination = extracted.destination || context.destination;
-
-          console.log("Creating route for:", origin, "to", destination);
+          const origin = extracted.origin || flightContext.origin;
+          const destination =
+            extracted.destination || flightContext.destination;
 
           const fromCoords = getCityCoordinates(origin);
           const toCoords = getCityCoordinates(destination);
 
-          console.log("From coords:", fromCoords);
-          console.log("To coords:", toCoords);
-
           if (fromCoords && toCoords) {
-            newRoute = {
+            const createdRoute = {
               from: {
                 city: origin,
                 lat: fromCoords.lat,
@@ -276,39 +392,45 @@ export default function TravelAssistant() {
                 lon: toCoords.lon,
               },
             };
-            console.log("Created route:", newRoute);
-            setRoute(newRoute);
-          } else {
-            console.error("Could not find coordinates for cities");
+            setFlightRoute(createdRoute);
           }
         }
       }
-      if (newJets.length > 0) { // <--- ADD THIS ENTIRE BLOCK
+      if (newJets.length > 0) {
         setJets(newJets);
+        setJetsSearched(true);
         setActiveTab("jets");
         if (typeof window !== "undefined" && window.innerWidth < 768) {
           setMobileTab("jets");
         }
+
+        // Update jet context with extracted info
+        setJetContext((prev) => ({
+          ...prev,
+          origin: extracted.origin || prev.origin,
+          destination: extracted.destination || prev.destination,
+        }));
       }
       if (newHotels.length > 0) {
         setHotels(newHotels);
         if (text.toLowerCase().includes("hotel")) {
           setActiveTab("hotels");
-          // Auto-switch to hotels tab on mobile when hotels are loaded
           if (typeof window !== "undefined" && window.innerWidth < 768) {
             setMobileTab("hotels");
           }
         }
       }
+      // Route is now handled automatically by useEffect when locations change
       if (newRoute) {
-        console.log("Setting route from API response:", newRoute);
-        setRoute(newRoute);
+        console.log(
+          "API provided route (will use auto-generated route instead):",
+          newRoute
+        );
       }
       if (newTravelPlan) {
         setTravelPlan(newTravelPlan);
         setTravelPlanImages(newTravelPlanImages);
         setActiveTab("plan");
-        // Auto-switch to plan tab on mobile when travel plan is loaded
         if (typeof window !== "undefined" && window.innerWidth < 768) {
           setMobileTab("plan");
         }
@@ -316,15 +438,12 @@ export default function TravelAssistant() {
       if (newSearchResults.length > 0) {
         setSearchResults(newSearchResults);
         setActiveTab("plan");
-        // Auto-switch to plan tab on mobile when search results are loaded
         if (typeof window !== "undefined" && window.innerWidth < 768) {
           setMobileTab("plan");
         }
       }
 
-      // Add bot message
       if (botText) {
-        // Filter out duplicate flight summary if we have structured flights
         if (flightsForChat.length > 0) {
           const lines = botText.split("\n");
           const filteredLines = lines.filter((line) => {
@@ -345,17 +464,11 @@ export default function TravelAssistant() {
           }
         }
 
-         setMessages((prev) => [
-          ...prev,
-          { text: botText, who: "bot" },
-        ]);
+        setMessages((prev) => [...prev, { text: botText, who: "bot" }]);
         speakText(botText);
       } else if (flightsForChat.length > 0) {
         const msg = "Great! I found flight options for you. ✈️";
-        setMessages((prev) => [
-          ...prev,
-          { text: msg, who: "bot" },
-        ]);
+        setMessages((prev) => [...prev, { text: msg, who: "bot" }]);
         speakText(msg);
       }
     } catch (error) {
@@ -374,32 +487,90 @@ export default function TravelAssistant() {
     sendMessage(suggestion);
   };
 
+  const handleLocationChange = useCallback(
+    (origin: string, destination: string, searchType: "flight" | "jet") => {
+      // Update the appropriate context immediately when locations change
+      if (searchType === "jet") {
+        setJetContext((prev) => ({
+          ...prev,
+          origin,
+          destination,
+        }));
+      } else {
+        setFlightContext((prev) => ({
+          ...prev,
+          origin,
+          destination,
+        }));
+      }
+    },
+    []
+  );
+
   const handleSearchFormSubmit = (searchData: Partial<Context>) => {
-    // Update context with the search data
-    setContext((prev) => ({ ...prev, ...searchData }));
+    setShowQuickForm(false);
 
-    // Create a message from the search data
+    // Update the correct context based on search type
+    if (searchData.searchType === "jet") {
+      setJetContext((prev) => ({ ...prev, ...searchData }));
+    } else {
+      setFlightContext((prev) => ({ ...prev, ...searchData }));
+    }
+
     const tripType = searchData.roundTrip ? "round-trip" : "one-way";
-    const summaryParts = [
-      `${tripType} flight from ${searchData.origin} to ${searchData.destination}`,
-      searchData.departDate &&
-      `Departure: ${new Date(searchData.departDate).toLocaleDateString(
-        "en-US",
-        { month: "long", day: "numeric", year: "numeric" }
-      )}`,
-      searchData.returnDate &&
-      searchData.roundTrip &&
-      `Return: ${new Date(searchData.returnDate).toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      })}`,
-      `${searchData.passengers} ${searchData.passengers === 1 ? "passenger" : "passengers"
-      }`,
-    ].filter(Boolean);
 
-    const searchMessage = `Find ${summaryParts.join(", ")}`;
-    sendMessage(searchMessage);
+    if (searchData.searchType === "jet") {
+      const summaryParts = [
+        `${tripType} private jet from ${searchData.origin} to ${searchData.destination}`,
+        searchData.departDate &&
+          `Departure: ${new Date(searchData.departDate).toLocaleDateString(
+            "en-US",
+            { month: "long", day: "numeric", year: "numeric" }
+          )}`,
+        searchData.returnDate &&
+          searchData.roundTrip &&
+          `Return: ${new Date(searchData.returnDate).toLocaleDateString(
+            "en-US",
+            {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            }
+          )}`,
+        `${searchData.passengers} ${
+          searchData.passengers === 1 ? "passenger" : "passengers"
+        }`,
+      ].filter(Boolean);
+
+      const searchMessage = `Find ${summaryParts.join(", ")}`;
+      sendMessage(searchMessage);
+    } else {
+      const summaryParts = [
+        `${tripType} flight from ${searchData.origin} to ${searchData.destination}`,
+        searchData.departDate &&
+          `Departure: ${new Date(searchData.departDate).toLocaleDateString(
+            "en-US",
+            { month: "long", day: "numeric", year: "numeric" }
+          )}`,
+        searchData.returnDate &&
+          searchData.roundTrip &&
+          `Return: ${new Date(searchData.returnDate).toLocaleDateString(
+            "en-US",
+            {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            }
+          )}`,
+        `${searchData.passengers} ${
+          searchData.passengers === 1 ? "passenger" : "passengers"
+        }`,
+        searchData.travelClass && `Class: ${searchData.travelClass}`,
+      ].filter(Boolean);
+
+      const searchMessage = `Find ${summaryParts.join(", ")}`;
+      sendMessage(searchMessage);
+    }
   };
 
   const suggestions = [
@@ -411,7 +582,6 @@ export default function TravelAssistant() {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      {/* Header */}
       <header className="border-b bg-card/50 backdrop-blur-sm">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -424,23 +594,6 @@ export default function TravelAssistant() {
             />
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                console.log("Map button clicked. Current route:", route);
-                setShowAirportsMap(!showAirportsMap);
-              }}
-              className={`hidden md:flex ${showAirportsMap ? "text-primary" : ""
-                }`}
-              title={showAirportsMap ? "Hide Map" : "Show Map"}
-            >
-              {showAirportsMap ? (
-                <List className="h-5 w-5" />
-              ) : (
-                <MapIcon className="h-5 w-5" />
-              )}
-            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -468,83 +621,95 @@ export default function TravelAssistant() {
         </div>
       </header>
 
-      {/* Mobile Tab Navigation */}
       <div className="md:hidden border-b bg-card">
-        <div className="grid grid-cols-5">
+        <div className="grid grid-cols-6">
           <button
-            className={`py-3 text-xs font-medium ${mobileTab === "chat"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-              }`}
+            className={`py-3 text-xs font-medium ${
+              mobileTab === "chat"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
             onClick={() => setMobileTab("chat")}
           >
             Chat
           </button>
           <button
-            className={`py-3 text-xs font-medium ${mobileTab === "flights"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-              }`}
+            className={`py-3 text-xs font-medium ${
+              mobileTab === "flights"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
             onClick={() => setMobileTab("flights")}
           >
             Flights
           </button>
           <button
-            className={`py-3 text-xs font-medium ${mobileTab === "hotels"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-              }`}
+            className={`py-3 text-xs font-medium ${
+              mobileTab === "hotels"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
             onClick={() => setMobileTab("hotels")}
           >
             Hotels
           </button>
           <button
-            className={`py-3 text-xs font-medium ${mobileTab === "plan"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-              }`}
+            className={`py-3 text-xs font-medium ${
+              mobileTab === "plan"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
             onClick={() => setMobileTab("plan")}
           >
             Plan
           </button>
           <button
-            className={`py-3 text-xs font-medium ${mobileTab === "jets"
-              ? "text-primary border-b-2 border-primary"
-              : "text-muted-foreground"
-              }`}
+            className={`py-3 text-xs font-medium ${
+              mobileTab === "jets"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
             onClick={() => setMobileTab("jets")}
           >
             Jets
           </button>
+          <button
+            className={`py-3 text-xs font-medium ${
+              mobileTab === "voice"
+                ? "text-primary border-b-2 border-primary"
+                : "text-muted-foreground"
+            }`}
+            onClick={() => setMobileTab("voice")}
+          >
+            Voice
+          </button>
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Desktop: Side by side */}
         <div className="hidden md:flex flex-1 overflow-hidden">
-          {/* Chat Panel */}
           <div className="w-[35%] border-r flex flex-col">
             <ChatPanel
               messages={messages}
               chatEndRef={chatEndRef}
               showDetailsForm={showDetailsForm}
-              context={context}
-              onContextUpdate={setContext}
+              context={flightContext}
+              onContextUpdate={setFlightContext}
               onSearchFormSubmit={handleSearchFormSubmit}
+              onLocationChange={handleLocationChange}
               onDetailsSubmit={(updatedContext) => {
-                setContext(updatedContext);
+                setFlightContext(updatedContext);
                 setShowDetailsForm(false);
                 const summaryParts = [
                   `Route: ${updatedContext.origin} to ${updatedContext.destination}`,
                   updatedContext.departDate &&
-                  `Departure date: ${updatedContext.departDate}`,
+                    `Departure date: ${updatedContext.departDate}`,
                   updatedContext.returnDate &&
-                  `Return date: ${updatedContext.returnDate}`,
+                    `Return date: ${updatedContext.returnDate}`,
                   `Travellers: ${updatedContext.passengers}`,
                   `Travel class: ${updatedContext.travelClass}`,
                   updatedContext.nonStopOnly &&
-                  "Preference: Nonstop flights only",
+                    "Preference: Nonstop flights only",
                 ].filter(Boolean);
                 const summaryMessage = `Here are my flight details:\n${summaryParts
                   .map((p) => `• ${p}`)
@@ -563,7 +728,6 @@ export default function TravelAssistant() {
               }}
             />
 
-            {/* Input Area */}
             <div className="border-t p-4 bg-card/50">
               {messages.length === 0 && (
                 <div className="mb-4 hidden md:flex flex-wrap gap-2">
@@ -604,53 +768,77 @@ export default function TravelAssistant() {
             </div>
           </div>
 
-          {/* Results Panel */}
           <div className="w-[65%] flex flex-col overflow-hidden">
-            {showAirportsMap ? (
-              <div className="flex-1 w-full h-full">
-                <AirportsMap route={route} />
-              </div>
-            ) : (
-              <Tabs
-                value={activeTab}
-                onValueChange={setActiveTab}
-                className="flex-1 flex flex-col overflow-hidden"
-              >
-                <TabsList className="mx-4 mt-4">
-                  <TabsTrigger value="flights">Flights</TabsTrigger>
-                  <TabsTrigger value="hotels">Hotels</TabsTrigger>
-                  <TabsTrigger value="plan">Travel Plan</TabsTrigger>
-                  <TabsTrigger value="jets">Jets</TabsTrigger>
-                </TabsList>
-                <TabsContent
-                  value="flights"
-                  className="flex-1 overflow-auto mt-0"
-                >
-                  <FlightsPanel flights={flights} context={context} />
-                </TabsContent>
-                <TabsContent
-                  value="hotels"
-                  className="flex-1 overflow-auto mt-0"
-                >
-                  <HotelsPanel hotels={hotels} />
-                </TabsContent>
-                <TabsContent value="plan" className="flex-1 overflow-auto mt-0">
-                  <TravelPlanPanel
-                    travelPlan={travelPlan}
-                    travelPlanImages={travelPlanImages}
-                    searchResults={searchResults}
+            <Tabs
+              value={activeTab}
+              onValueChange={setActiveTab}
+              className="flex-1 flex flex-col overflow-hidden"
+            >
+              <TabsList className="mx-4 mt-4">
+                <TabsTrigger value="flights">Flights</TabsTrigger>
+                <TabsTrigger value="hotels">Hotels</TabsTrigger>
+                <TabsTrigger value="plan">Travel Plan</TabsTrigger>
+                <TabsTrigger value="jets">Jets</TabsTrigger>
+                <TabsTrigger value="voice">Voice Mode</TabsTrigger>
+              </TabsList>
+
+              {showQuickForm && (
+                <div className="mx-4 mt-2">
+                  <FlightSearchForm
+                    key={`quick-form-${quickFormKey}`}
+                    onSearch={(searchData) => {
+                      setShowQuickForm(false);
+                      handleSearchFormSubmit(searchData);
+                    }}
+                    defaultValues={quickFormDefaultsRef.current}
+                    onLocationChange={handleLocationChange}
+                    isQuickForm={true}
                   />
-                </TabsContent>
-                 <TabsContent value="jets" className="flex-1 overflow-auto mt-0">
-                {/* PASS THE onJetSelect PROP HERE */}
-                <JetsPanel jets={jets} onJetSelect={setSelectedJet} />
+                </div>
+              )}
+
+              <TabsContent
+                value="flights"
+                className="flex-1 overflow-auto mt-0"
+              >
+                <FlightsPanel
+                  flights={flights}
+                  context={flightContext}
+                  route={flightRoute}
+                  searched={flightsSearched}
+                />
               </TabsContent>
-              </Tabs>
-            )}
+              <TabsContent value="hotels" className="flex-1 overflow-auto mt-0">
+                <HotelsPanel hotels={hotels} />
+              </TabsContent>
+              <TabsContent value="plan" className="flex-1 overflow-auto mt-0">
+                <TravelPlanPanel
+                  travelPlan={travelPlan}
+                  travelPlanImages={travelPlanImages}
+                  searchResults={searchResults}
+                />
+              </TabsContent>
+              <TabsContent value="jets" className="flex-1 overflow-auto mt-0">
+                <JetsPanel
+                  jets={jets}
+                  onJetSelect={setSelectedJet}
+                  route={jetRoute}
+                  searched={jetsSearched}
+                />
+              </TabsContent>
+              <TabsContent value="voice" className="flex-1 overflow-hidden mt-0">
+                <VoiceModePanel
+                  onSendToChat={async (query) => {
+                    // Just send to chat - existing backend will handle everything
+                    await sendMessage(query);
+                  }}
+                  sessionId={sessionIdRef.current}
+                />
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
 
-        {/* Mobile: Tabbed */}
         <div className="md:hidden flex-1 flex flex-col overflow-hidden">
           {mobileTab === "chat" && (
             <>
@@ -658,22 +846,24 @@ export default function TravelAssistant() {
                 messages={messages}
                 chatEndRef={chatEndRef}
                 showDetailsForm={showDetailsForm}
-                context={context}
-                onContextUpdate={setContext}
+                context={flightContext}
+                onContextUpdate={setFlightContext}
                 onSearchFormSubmit={handleSearchFormSubmit}
+                onLocationChange={handleLocationChange}
+                hideMainForm={showQuickForm}
                 onDetailsSubmit={(updatedContext) => {
-                  setContext(updatedContext);
+                  setFlightContext(updatedContext);
                   setShowDetailsForm(false);
                   const summaryParts = [
                     `Route: ${updatedContext.origin} to ${updatedContext.destination}`,
                     updatedContext.departDate &&
-                    `Departure date: ${updatedContext.departDate}`,
+                      `Departure date: ${updatedContext.departDate}`,
                     updatedContext.returnDate &&
-                    `Return date: ${updatedContext.returnDate}`,
+                      `Return date: ${updatedContext.returnDate}`,
                     `Travellers: ${updatedContext.passengers}`,
                     `Travel class: ${updatedContext.travelClass}`,
                     updatedContext.nonStopOnly &&
-                    "Preference: Nonstop flights only",
+                      "Preference: Nonstop flights only",
                   ].filter(Boolean);
                   const summaryMessage = `Here are my flight details:\n${summaryParts
                     .map((p) => `• ${p}`)
@@ -691,6 +881,20 @@ export default function TravelAssistant() {
                   ]);
                 }}
               />
+              {showQuickForm && (
+                <div className="mx-4 mb-20 md:mb-4">
+                  <FlightSearchForm
+                    key={`quick-form-mobile-${quickFormKey}`}
+                    onSearch={(searchData) => {
+                      setShowQuickForm(false);
+                      handleSearchFormSubmit(searchData);
+                    }}
+                    defaultValues={quickFormDefaultsRef.current}
+                    onLocationChange={handleLocationChange}
+                    isQuickForm={true}
+                  />
+                </div>
+              )}
               <div className="border-t p-4 bg-card/50">
                 {messages.length === 0 && (
                   <div className="mb-4 hidden md:flex flex-wrap gap-2">
@@ -733,7 +937,12 @@ export default function TravelAssistant() {
           )}
           {mobileTab === "flights" && (
             <div className="flex-1 overflow-auto">
-              <FlightsPanel flights={flights} context={context} />
+              <FlightsPanel
+                flights={flights}
+                context={flightContext}
+                route={flightRoute}
+                searched={flightsSearched}
+              />
             </div>
           )}
           {mobileTab === "hotels" && (
@@ -751,17 +960,29 @@ export default function TravelAssistant() {
             </div>
           )}
           {mobileTab === "jets" && (
-             <div className="flex-1 overflow-auto">
-              {/* PASS THE onJetSelect PROP FOR MOBILE VIEW AS WELL */}
-              <JetsPanel jets={jets} onJetSelect={setSelectedJet} />
+            <div className="flex-1 overflow-auto">
+              <JetsPanel
+                jets={jets}
+                onJetSelect={setSelectedJet}
+                route={jetRoute}
+                searched={jetsSearched}
+              />
+            </div>
+          )}
+          {mobileTab === "voice" && (
+            <div className="flex-1 overflow-hidden">
+              <VoiceModePanel
+                onSendToChat={async (query) => {
+                  // Just send to chat - existing backend will handle everything
+                  await sendMessage(query);
+                }}
+                sessionId={sessionIdRef.current}
+              />
             </div>
           )}
         </div>
       </div>
-       <JetDetailModal 
-        jet={selectedJet} 
-        onClose={() => setSelectedJet(null)} 
-      />
+      <JetDetailModal jet={selectedJet} onClose={() => setSelectedJet(null)} />
     </div>
   );
 }

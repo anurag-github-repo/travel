@@ -3,24 +3,46 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExternalLink } from "lucide-react";
-import type { Flight, Context } from "@/lib/types";
+import type { Flight, Context, Route } from "@/lib/types";
 import { formatPrice, parseTime } from "@/lib/helpers";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+
+const AirportsMap = dynamic(() => import("@/components/airports-map"), {
+  ssr: false,
+});
 
 interface FlightsPanelProps {
   flights: Flight[];
   context: Context;
+  route: Route | null;
+  searched: boolean;
 }
 
-export default function FlightsPanel({ flights, context }: FlightsPanelProps) {
+export default function FlightsPanel({
+  flights,
+  context,
+  route,
+  searched,
+}: FlightsPanelProps) {
+  // State 1: No search performed yet
+  if (!searched) {
+    return (
+      <div className="h-full w-full">
+        <AirportsMap route={route} />
+      </div>
+    );
+  }
+
+  // State 2 & 3: Search performed - show cards or empty state
   if (flights.length === 0) {
     return (
       <div className="h-full flex items-center justify-center p-8 text-center">
         <div className="space-y-3">
           <div className="text-5xl">✈️</div>
-          <h3 className="text-lg font-semibold">No flights yet</h3>
+          <h3 className="text-lg font-semibold">No flights found</h3>
           <p className="text-sm text-muted-foreground max-w-sm">
-            Ask me about flights and I&apos;ll find the best options for you
+            Try searching with different dates or destinations
           </p>
         </div>
       </div>

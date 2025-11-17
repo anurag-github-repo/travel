@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import FlightSearchForm from "@/components/flight-search-form";
-import type { Message, Context, Flight } from "@/lib/types";
-import { formatMessage, parseTime, formatPrice } from "@/lib/helpers";
+import type { Message, Context } from "@/lib/types";
+import { formatMessage } from "@/lib/helpers";
 
 interface ChatPanelProps {
   messages: Message[];
@@ -17,6 +17,8 @@ interface ChatPanelProps {
   onDetailsSubmit: (context: Context) => void;
   onDetailsSkip: () => void;
   onSearchFormSubmit: (searchData: Partial<Context>) => void;
+  onLocationChange?: (origin: string, destination: string, searchType: "flight" | "jet") => void;
+  hideMainForm?: boolean;
 }
 
 export default function ChatPanel({
@@ -28,6 +30,8 @@ export default function ChatPanel({
   onDetailsSubmit,
   onDetailsSkip,
   onSearchFormSubmit,
+  onLocationChange,
+  hideMainForm = false,
 }: ChatPanelProps) {
   const handleDetailsSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -46,56 +50,57 @@ export default function ChatPanel({
     onDetailsSubmit(updatedContext);
   };
 
-   
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <FlightSearchForm
-        onSearch={onSearchFormSubmit}
-        defaultValues={context}
-      />
+      {!hideMainForm && (
+        <FlightSearchForm
+          onSearch={onSearchFormSubmit}
+          defaultValues={context}
+          onLocationChange={onLocationChange}
+        />
+      )}
 
       <div className="flex-1 overflow-auto custom-scrollbar p-4 space-y-4">
         {messages.map((msg, idx) => (
-        <div
-          key={idx}
-          className={`animate-slide-in ${
-            msg.who === "user" ? "flex justify-end" : ""
-          }`}
-        >
           <div
-            className={`max-w-[100%] md:max-w-[90%] sm:max-w-[95%] rounded-lg p-2 px-3 text-sm ${
-              msg.who === "user"
-                ? "bg-primary text-primary-foreground ml-auto"
-                : "bg-muted"
+            key={idx}
+            className={`animate-slide-in ${
+              msg.who === "user" ? "flex justify-end" : ""
             }`}
           >
-            {msg.isLoading ? (
-              <div className="flex items-center gap-2">
+            <div
+              className={`max-w-[100%] md:max-w-[90%] sm:max-w-[95%] rounded-lg p-2 px-3 text-sm ${
+                msg.who === "user"
+                  ? "bg-primary text-primary-foreground ml-auto"
+                  : "bg-muted"
+              }`}
+            >
+              {msg.isLoading ? (
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-2 h-2 bg-current rounded-full animate-bounce"
+                    style={{ animationDelay: "0ms" }}
+                  />
+                  <div
+                    className="w-2 h-2 bg-current rounded-full animate-bounce"
+                    style={{ animationDelay: "150ms" }}
+                  />
+                  <div
+                    className="w-2 h-2 bg-current rounded-full animate-bounce"
+                    style={{ animationDelay: "300ms" }}
+                  />
+                  <span className="ml-2">Searching...</span>
+                </div>
+              ) : (
                 <div
-                  className="w-2 h-2 bg-current rounded-full animate-bounce"
-                  style={{ animationDelay: "0ms" }}
+                  dangerouslySetInnerHTML={{
+                    __html: formatMessage(msg.text),
+                  }}
                 />
-                <div
-                  className="w-2 h-2 bg-current rounded-full animate-bounce"
-                  style={{ animationDelay: "150ms" }}
-                />
-                <div
-                  className="w-2 h-2 bg-current rounded-full animate-bounce"
-                  style={{ animationDelay: "300ms" }}
-                />
-                <span className="ml-2">Searching...</span>
-              </div>
-            ) : (
-              <>
-                <div
-                  dangerouslySetInnerHTML={{ __html: formatMessage(msg.text) }}
-                />
-              </>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
 
         <div ref={chatEndRef} />
       </div>

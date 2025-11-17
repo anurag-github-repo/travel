@@ -6,22 +6,39 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, Users, ArrowRight, Gauge, BaggageClaim } from "lucide-react";
 import Image from "next/image";
-import type { Aircraft } from "@/lib/types";
+import type { Aircraft, Route } from "@/lib/types";
+import dynamic from "next/dynamic";
+
+const AirportsMap = dynamic(() => import("@/components/airports-map"), {
+  ssr: false,
+});
 
 interface JetsPanelProps {
     jets: Aircraft[];
     onJetSelect: (jet: Aircraft) => void;
+    route: Route | null;
+    searched: boolean;
 }
 
-export default function JetsPanel({ jets, onJetSelect }: JetsPanelProps) { 
+export default function JetsPanel({ jets, onJetSelect, route, searched }: JetsPanelProps) {
+    // State 1: No search performed yet
+    if (!searched) {
+        return (
+            <div className="h-full w-full">
+                <AirportsMap route={route} />
+            </div>
+        );
+    }
+
+    // State 2 & 3: Search performed - show cards or empty state
     if (jets.length === 0) {
         return (
             <div className="h-full flex items-center justify-center p-8 text-center">
                 <div className="space-y-3">
                     <div className="text-5xl">🛩️</div>
-                    <h3 className="text-lg font-semibold">Find Your Private Jet</h3>
+                    <h3 className="text-lg font-semibold">No jets found</h3>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                        Ask me to "show jets from Mumbai to Delhi" to see available charter options.
+                        Try searching with different routes to see available charter options
                     </p>
                 </div>
             </div>

@@ -36,7 +36,6 @@ export interface RouteLocation {
   lon: number;
 }
 
-
 export interface Route {
   from: RouteLocation;
   to: RouteLocation;
@@ -55,7 +54,6 @@ export interface ToolResult {
   result?: string;
 }
 
-
 export interface AircraftSpecification {
   Manufacturer: string;
   Model: string;
@@ -63,9 +61,9 @@ export interface AircraftSpecification {
   Seats: string;
   Speed: string;
   Range: string;
-  'Luggage Capacity': string;
-  'Interior Height': string;
-  'Interior Width': string;
+  "Luggage Capacity": string;
+  "Interior Height": string;
+  "Interior Width": string;
 }
 
 export interface Aircraft {
@@ -76,7 +74,6 @@ export interface Aircraft {
   specifications: AircraftSpecification;
   gallery_images: string[];
 }
-
 
 export interface APIResponse {
   text?: string;
@@ -101,4 +98,8 @@ export interface Context {
   extractedInfo: Record<string, any>;
   travelClass: string;
   nonStopOnly: boolean;
+  searchType?: "flight" | "jet";
+  adults?: number;
+  children?: number;
+  timePreference?: "day" | "night" | "any";
 }

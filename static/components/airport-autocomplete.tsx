@@ -10,6 +10,7 @@ interface AirportAutocompleteProps {
   placeholder?: string;
   label?: string;
   required?: boolean;
+  compact?: boolean;
 }
 
 export default function AirportAutocomplete({
@@ -18,6 +19,7 @@ export default function AirportAutocomplete({
   placeholder = "Search airports...",
   label,
   required = false,
+  compact = false,
 }: AirportAutocompleteProps) {
   const [inputValue, setInputValue] = useState("");
   const [suggestions, setSuggestions] = useState<Airport[]>([]);
@@ -68,13 +70,13 @@ export default function AirportAutocomplete({
   return (
     <div ref={wrapperRef} className="relative w-full">
       {label && (
-        <label className="block text-sm font-medium mb-1.5">
+        <label className={`block font-medium ${compact ? 'text-xs mb-1' : 'text-sm mb-1.5'}`}>
           {label} {required && <span className="text-destructive">*</span>}
         </label>
       )}
       <div className="relative">
-        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none">
-          <Plane className="w-4 h-4" />
+        <div className={`absolute top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none ${compact ? 'left-2' : 'left-3'}`}>
+          <Plane className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
         </div>
         <input
           type="text"
@@ -83,7 +85,7 @@ export default function AirportAutocomplete({
           onFocus={handleFocus}
           placeholder={placeholder}
           required={required}
-          className="w-full h-10 pl-10 pr-3 rounded-md border border-input bg-background text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          className={`w-full rounded-md border border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${compact ? 'h-8 pl-8 pr-2 text-xs' : 'h-10 pl-10 pr-3 text-sm'}`}
         />
       </div>
 
