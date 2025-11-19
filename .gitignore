@@ -2,3 +2,6 @@ venv/
 myenv/
 __pycache__/
 logs/
+.aider*
+.env
+.env
